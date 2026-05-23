@@ -1,0 +1,219 @@
+# Running Crypto Predictor PRO 24/7 — Free Cloud Deployment
+
+## Best option: Oracle Cloud (Always Free — $0 forever)
+
+Oracle gives you a real server that never expires and never charges.
+It's more setup than Railway but it's completely free and has no limits.
+
+---
+
+## Step 1 — Create Oracle Cloud account
+
+1. Go to https://cloud.oracle.com
+2. Click "Start for free"
+3. Fill in details — requires a credit card but will NOT be charged
+4. Select your home region (pick one close to you — you can't change this later)
+5. Wait for account activation (can take up to 30 minutes)
+
+---
+
+## Step 2 — Create a free VM
+
+1. Log into Oracle Cloud Console
+2. Click the menu (☰) → Compute → Instances
+3. Click "Create instance"
+4. Name it: `crypto-predictor`
+5. Image: **Ubuntu 22.04** (click "Change image" if needed)
+6. Shape: Click "Change shape" → select **VM.Standard.A1.Flex** → set 1 OCPU, 6GB RAM → this is the Always Free shape
+7. Under "Add SSH keys" → click "Generate a key pair for me" → Download both keys (save them somewhere safe)
+8. Click "Create"
+
+Wait about 2 minutes for it to start. Copy the **Public IP address** shown.
+
+---
+
+## Step 3 — Connect to your server
+
+On Windows, open Command Prompt and run:
+
+```bash
+ssh -i path\to\your\private_key.key ubuntu@YOUR_IP_ADDRESS
+```
+
+Example:
+```bash
+ssh -i C:\Users\Anit\Downloads\ssh-key.key ubuntu@152.70.123.45
+```
+
+If it asks "Are you sure you want to continue connecting?" type `yes`
+
+---
+
+## Step 4 — Install Node.js and Python on the server
+
+Once connected, run these commands one by one:
+
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install Node.js 20
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Install Python and pip
+sudo apt install -y python3 python3-pip
+
+# Install Python packages
+pip3 install xgboost scikit-learn pandas numpy
+
+# Verify
+node --version
+python3 --version
+```
+
+---
+
+## Step 5 — Upload your project files
+
+On your Windows machine, open a NEW Command Prompt (keep the SSH one open) and run:
+
+```bash
+scp -i C:\Users\Anit\Downloads\ssh-key.key -r C:\Users\Anit\OneDrive\Desktop\Test\Trader\crypto-predictor ubuntu@YOUR_IP_ADDRESS:~/
+```
+
+This copies your entire project folder to the server.
+
+---
+
+## Step 6 — Install Node packages on server
+
+Back in your SSH terminal:
+
+```bash
+cd ~/crypto-predictor
+npm install
+```
+
+---
+
+## Step 7 — Open firewall port 3000
+
+In Oracle Cloud Console:
+1. Go to your instance → click the VCN name
+2. Security Lists → Default Security List
+3. Add Ingress Rule:
+   - Source: 0.0.0.0/0
+   - Destination Port: 3000
+   - Protocol: TCP
+
+Also run on the server:
+```bash
+sudo iptables -I INPUT -p tcp --dport 3000 -j ACCEPT
+sudo netstat-persistent save  # saves rule after reboot
+```
+
+---
+
+## Step 8 — Run with PM2 (keeps it alive 24/7)
+
+```bash
+# Install PM2 process manager
+sudo npm install -g pm2
+
+# Start the server
+pm2 start server.js --name crypto-predictor
+
+# Make it auto-start on reboot
+pm2 startup
+pm2 save
+```
+
+Your server is now running at: `http://YOUR_IP_ADDRESS:3000`
+
+---
+
+## Step 9 — Monitor it
+
+```bash
+# See live logs
+pm2 logs crypto-predictor
+
+# See status
+pm2 status
+
+# Restart if needed
+pm2 restart crypto-predictor
+
+# Stop
+pm2 stop crypto-predictor
+```
+
+---
+
+## Step 10 — Update your code remotely
+
+When you make changes on your computer:
+
+```bash
+# On your Windows machine — upload updated files
+scp -i C:\Users\Anit\Downloads\ssh-key.key server.js ubuntu@YOUR_IP:~/crypto-predictor/
+scp -i C:\Users\Anit\Downloads\ssh-key.key learning_engine.js ubuntu@YOUR_IP:~/crypto-predictor/
+
+# Then on the server — restart
+pm2 restart crypto-predictor
+```
+
+---
+
+## Access the app from your browser
+
+Once deployed, open this in your browser from anywhere:
+```
+http://YOUR_IP_ADDRESS:3000
+```
+
+---
+
+## What happens now (learning schedule)
+
+| Time | What the server does |
+|------|---------------------|
+| Every 30s | Fetches 500 new candles, updates market state |
+| Every 5 min | Checks prediction outcome, calculates real PnL |
+| Every 25 results | Auto-retrains XGBoost with all accumulated data |
+| Every midnight | Runs walk-forward validation across all windows |
+| Continuous | Adjusts indicator weights based on accuracy |
+
+After 1 week: ~2,016 predictions per coin
+After 1 month: ~8,640 predictions per coin
+After 3 months: ~25,920 predictions — XGBoost becomes genuinely predictive
+
+---
+
+## Alternative: Railway.app (easier, $5/month after free tier)
+
+1. Go to https://railway.app
+2. Sign up with GitHub
+3. New Project → Deploy from GitHub repo
+4. Add your project to a GitHub repo first:
+   ```bash
+   git init
+   git add .
+   git commit -m "initial"
+   # Then push to GitHub
+   ```
+5. Railway auto-detects Node.js and deploys
+6. Add environment variables if needed
+7. Your app gets a public URL automatically
+
+---
+
+## Cheapest paid option: Hetzner Cloud (€4/month, very reliable)
+
+1. https://hetzner.com/cloud
+2. Create CX22 server (2 vCPU, 4GB RAM)
+3. Ubuntu 22.04
+4. Follow same SSH steps as Oracle above
+
+This is what most professional algo traders use for small bots.

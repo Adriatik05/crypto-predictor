@@ -1,0 +1,20 @@
+{
+  "name": "crypto-predictor-pro",
+  "version": "2.0.0",
+  "description": "Crypto Predictor PRO with XGBoost, SQLite, WebSocket",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "train-btc": "python ml_train.py BTC",
+    "train-eth": "python ml_train.py ETH"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.6",
+    "express": "^4.22.2",
+    "node-cron": "^4.2.1",
+    "node-fetch": "^2.7.0",
+    "sqlite3": "^6.0.1",
+    "ws": "^8.16.0"
+  }
+}

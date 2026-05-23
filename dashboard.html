@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>⚡ Predictor Dashboard</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#080b12;color:#fff;font-family:Inter,system-ui,sans-serif;min-height:100vh;padding:16px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{text-align:center;font-size:20px;font-weight:800;margin-bottom:4px}
+  .sub{text-align:center;font-size:11px;color:#333;margin-bottom:18px}
+  .tabs{display:flex;gap:6px;background:#0f1117;border-radius:12px;padding:4px;margin-bottom:16px}
+  .tab{flex:1;padding:8px 0;border-radius:9px;border:none;cursor:pointer;font-weight:700;font-size:13px;background:transparent;color:#444;transition:all .2s}
+  .tab.active{background:#627EEA;color:#fff}
+  .page{display:none}.page.active{display:block}
+  .sec{background:#0f1117;border-radius:12px;padding:16px;margin-bottom:12px;border:1px solid #ffffff08}
+  .sec-t{font-size:10px;color:#555;letter-spacing:1px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px}
+  .g5{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .card{background:#13181f;border-radius:10px;padding:12px;text-align:center}
+  .cl{font-size:10px;color:#333;letter-spacing:.5px}
+  .cv{font-size:18px;font-weight:900;margin-top:4px}
+  .cn{font-size:10px;margin-top:2px;color:#444}
+  canvas{display:block;border-radius:8px;width:100%}
+  .badge{font-size:10px;padding:2px 8px;border-radius:99px;font-weight:700}
+  .bar-bg{background:#0a0d14;border-radius:99px;height:5px;margin-top:4px}
+  .bar-fill{height:100%;border-radius:99px;transition:width .4s}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{color:#333;font-weight:600;padding:5px 8px;text-align:left;border-bottom:1px solid #ffffff08}
+  td{padding:5px 8px;border-bottom:1px solid #ffffff06;color:#666}
+  .signal-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#13181f;border-radius:10px;margin-bottom:8px;border:1px solid #ffffff08}
+  .ind-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#13181f;border-radius:8px;margin-bottom:6px}
+  .ind-bar{flex:1;margin:0 12px;background:#0a0d14;border-radius:99px;height:4px}
+  .ind-fill{height:100%;border-radius:99px}
+  .live-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .status-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:700}
+  .refresh-btn{padding:5px 14px;border:none;border-radius:8px;background:#627EEA22;color:#627EEA;font-size:11px;font-weight:700;cursor:pointer}
+  .refresh-btn:hover{background:#627EEA44}
+  .empty{font-size:12px;color:#333;text-align:center;padding:20px}
+  .pnl-pos{color:#22c55e}
+  .pnl-neg{color:#ef4444}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>⚡ Predictor Dashboard</h1>
+  <p class="sub" id="last-updated">Connecting to server…</p>
+
+  <div class="tabs">
+    <button class="tab active" onclick="showPage('overview')">Overview</button>
+    <button class="tab" onclick="showPage('paper')">Paper Trading</button>
+    <button class="tab" onclick="showPage('learning')">Learning</button>
+    <button class="tab" onclick="showPage('signals')">Live Signals</button>
+    <button class="tab" onclick="showPage('regimes')">Regimes</button>
+  </div>
+
+  <!-- OVERVIEW -->
+  <div id="page-overview" class="page active">
+    <div id="overview-btc"></div>
+    <div id="overview-eth" style="margin-top:12px"></div>
+  </div>
+
+  <!-- PAPER TRADING -->
+  <div id="page-paper" class="page">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="refresh-btn" onclick="loadAll()">↺ Refresh</button>
+      <select id="paper-coin" onchange="renderPaperPage()" style="background:#13181f;border:1px solid #ffffff12;border-radius:8px;padding:5px 10px;color:#fff;font-size:12px">
+        <option value="BTC">Bitcoin (BTC)</option>
+        <option value="ETH">Ethereum (ETH)</option>
+      </select>
+    </div>
+    <div id="paper-content"></div>
+  </div>
+
+  <!-- LEARNING -->
+  <div id="page-learning" class="page">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="refresh-btn" onclick="loadAll()">↺ Refresh</button>
+      <select id="learn-coin" onchange="renderLearningPage()" style="background:#13181f;border:1px solid #ffffff12;border-radius:8px;padding:5px 10px;color:#fff;font-size:12px">
+        <option value="BTC">Bitcoin (BTC)</option>
+        <option value="ETH">Ethereum (ETH)</option>
+      </select>
+    </div>
+    <div id="learning-content"></div>
+  </div>
+
+  <!-- LIVE SIGNALS -->
+  <div id="page-signals" class="page">
+    <div class="sec">
+      <div class="sec-t"><span>LIVE SIGNAL FEED</span><div class="live-dot"></div></div>
+      <div id="signal-feed"></div>
+    </div>
+    <div class="sec">
+      <div class="sec-t"><span>SYSTEM STATUS</span><button class="refresh-btn" onclick="loadAll()">↺ Refresh</button></div>
+      <div id="system-status"></div>
+    </div>
+  </div>
+
+  <!-- REGIMES -->
+  <div id="page-regimes" class="page">
+    <div id="regime-content"></div>
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:3000/api';
+let data = { BTC:{}, ETH:{}, status:{} };
+
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById(`page-${id}`).classList.add('active');
+  event.target.classList.add('active');
+}
+
+function sc(s){return s==='UP'?'#22c55e':'#ef4444';}
+function si(s){return s==='UP'?'▲':'▼';}
+function fmt(n,d=2){return n!=null?parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}):'—';}
+function fmtPct(v,d=2){const n=parseFloat(v);return isNaN(n)?'—':`${n>=0?'+':''}${n.toFixed(d)}%`;}
+function pnlColor(v){return parseFloat(v)>=0?'#22c55e':'#ef4444';}
+
+async function loadAll() {
+  try {
+    const [btcPaper, ethPaper, btcLearn, ethLearn, status] = await Promise.all([
+      fetch(`${API}/paper/BTC`).then(r=>r.json()).catch(()=>({})),
+      fetch(`${API}/paper/ETH`).then(r=>r.json()).catch(()=>({})),
+      fetch(`${API}/learning/BTC`).then(r=>r.json()).catch(()=>({})),
+      fetch(`${API}/learning/ETH`).then(r=>r.json()).catch(()=>({})),
+      fetch(`${API}/status`).then(r=>r.json()).catch(()=>({})),
+    ]);
+    data = { BTC:{paper:btcPaper,learn:btcLearn}, ETH:{paper:ethPaper,learn:ethLearn}, status };
+    document.getElementById('last-updated').textContent = `Last updated: ${new Date().toLocaleTimeString()} · Auto-refresh 30s`;
+    renderAll();
+  } catch(e) {
+    document.getElementById('last-updated').textContent = 'Server offline — start with: node server.js';
+  }
+}
+
+function renderAll() {
+  renderOverview();
+  renderPaperPage();
+  renderLearningPage();
+  renderSignalFeed();
+  renderSystemStatus();
+  renderRegimePage();
+}
+
+// ── OVERVIEW ─────────────────────────────────────────────
+function renderOverview() {
+  ['BTC','ETH'].forEach(coin => {
+    const p = data[coin]?.paper || {};
+    const l = data[coin]?.learn || {};
+    const s = data.status?.[coin] || {};
+    const ret = parseFloat(p.totalReturn||0);
+    const acc = parseFloat(l.accuracy||50);
+    const color = coin==='BTC'?'#F7931A':'#627EEA';
+
+    document.getElementById(`overview-${coin.toLowerCase()}`).innerHTML = `
+      <div class="sec" style="border-color:${color}25">
+        <div class="sec-t">
+          <span style="color:${color};font-weight:800">${coin==='BTC'?'₿ Bitcoin':'Ξ Ethereum'}</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span class="badge" style="background:${ret>=0?'#22c55e22':'#ef444422'};color:${ret>=0?'#22c55e':'#ef4444'}">${ret>=0?'+':''}${ret.toFixed(2)}% paper</span>
+            <span class="badge" style="background:${acc>55?'#22c55e22':'#f59e0b22'};color:${acc>55?'#22c55e':'#f59e0b'}">${acc.toFixed(1)}% acc</span>
+          </div>
+        </div>
+        <div class="g5">
+          <div class="card"><div class="cl">BALANCE</div><div class="cv" style="color:${color};font-size:15px">$${fmt(p.balance||10000,0)}</div><div class="cn">started $${fmt(p.startingBalance||10000,0)}</div></div>
+          <div class="card"><div class="cl">WIN RATE</div><div class="cv" style="color:${parseFloat(p.winRate||0)>50?'#22c55e':'#ef4444'}">${p.winRate||0}%</div><div class="cn">${p.trades||0} trades</div></div>
+          <div class="card"><div class="cl">SHARPE</div><div class="cv" style="color:${parseFloat(p.sharpe||0)>1?'#22c55e':parseFloat(p.sharpe||0)>0?'#f59e0b':'#ef4444'}">${p.sharpe||'—'}</div><div class="cn">risk-adjusted</div></div>
+          <div class="card"><div class="cl">MAX DD</div><div class="cv" style="color:${parseFloat(p.maxDD||0)<5?'#22c55e':'#ef4444'}">-${p.maxDD||0}%</div><div class="cn">drawdown</div></div>
+          <div class="card"><div class="cl">TRAINING</div><div class="cv" style="color:#627EEA;font-size:15px">${l.totalPredictions||0}</div><div class="cn">samples</div></div>
+        </div>
+        ${p.openTrade?`<div style="margin-top:10px;padding:10px 14px;background:#13181f;border-radius:10px;border:1px solid ${sc(p.openTrade.signal)}40;display:flex;justify-content:space-between;align-items:center">
+          <div><span style="color:${sc(p.openTrade.signal)};font-weight:800;font-size:14px">${si(p.openTrade.signal)} OPEN ${p.openTrade.signal}</span><span style="color:#555;font-size:10px;margin-left:10px">since ${new Date(p.openTrade.opened_at).toLocaleTimeString()}</span></div>
+          <div style="text-align:right"><div style="font-size:12px;color:#888">Entry $${fmt(p.openTrade.entry_price)} · SL $${fmt(p.openTrade.stop_loss)} · TP $${fmt(p.openTrade.take_profit)}</div></div>
+        </div>`:''}
+      </div>`;
+  });
+}
+
+// ── PAPER TRADING ─────────────────────────────────────────
+function renderPaperPage() {
+  const coin = document.getElementById('paper-coin')?.value || 'BTC';
+  const p = data[coin]?.paper || {};
+  if (!p.trades) { document.getElementById('paper-content').innerHTML = '<div class="empty">No paper trades yet. Server needs to be running and signals need to pass risk filters.</div>'; return; }
+
+  let html = `
+    <div class="sec">
+      <div class="sec-t"><span>ACCOUNT SUMMARY</span></div>
+      <div class="g4">
+        <div class="card"><div class="cl">BALANCE</div><div class="cv" style="color:${parseFloat(p.totalReturn||0)>=0?'#22c55e':'#ef4444'}">$${fmt(p.balance,0)}</div><div class="cn">${fmtPct(p.totalReturn)} total</div></div>
+        <div class="card"><div class="cl">WIN RATE</div><div class="cv" style="color:${parseFloat(p.winRate)>50?'#22c55e':'#ef4444'}">${p.winRate}%</div><div class="cn">${p.wins}/${p.trades} trades</div></div>
+        <div class="card"><div class="cl">SHARPE</div><div class="cv" style="color:${parseFloat(p.sharpe)>1?'#22c55e':parseFloat(p.sharpe)>0?'#f59e0b':'#ef4444'}">${p.sharpe}</div></div>
+        <div class="card"><div class="cl">MAX DRAWDOWN</div><div class="cv" style="color:#ef4444">-${p.maxDD}%</div></div>
+      </div>
+      <div class="g2" style="margin-top:10px">
+        <div class="card"><div class="cl">AVG WIN</div><div class="cv" style="color:#22c55e;font-size:15px">${fmtPct(p.avgWin,3)}</div></div>
+        <div class="card"><div class="cl">AVG LOSS</div><div class="cv" style="color:#ef4444;font-size:15px">${fmtPct(p.avgLoss,3)}</div></div>
+      </div>
+    </div>`;
+
+  // Exit reason breakdown
+  if (p.byReason && Object.keys(p.byReason).length) {
+    html += `<div class="sec"><div class="sec-t"><span>EXIT REASONS</span></div><div class="g3">`;
+    for (const [reason, stats] of Object.entries(p.byReason)) {
+      html += `<div class="card"><div class="cl">${reason.toUpperCase()}</div><div class="cv" style="color:${stats.pnl>=0?'#22c55e':'#ef4444'};font-size:15px">${stats.count}</div><div class="cn">${fmtPct(stats.pnl/100)} total PnL</div></div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  // Recent trades table
+  if (p.recentTrades?.length) {
+    html += `<div class="sec"><div class="sec-t"><span>RECENT TRADES (last 20)</span></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>#</th><th>Signal</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Exit Reason</th><th>Regime</th><th>Conf</th></tr></thead>
+        <tbody>
+          ${p.recentTrades.map(t=>`<tr>
+            <td style="color:#444">${t.id}</td>
+            <td style="color:${sc(t.signal)}">${si(t.signal)} ${t.signal}</td>
+            <td>$${fmt(t.entry_price)}</td>
+            <td>$${fmt(t.exit_price)}</td>
+            <td style="color:${pnlColor(t.net_pnl_pct)}">${fmtPct(t.net_pnl_pct*100,3)}</td>
+            <td style="color:${t.exit_reason==='take_profit'?'#22c55e':t.exit_reason==='trailing_stop'?'#ef4444':'#888'}">${t.exit_reason||'—'}</td>
+            <td style="color:#555">${t.regime||'—'}</td>
+            <td>${t.confidence||'—'}%</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div></div>`;
+  }
+  document.getElementById('paper-content').innerHTML = html;
+}
+
+// ── LEARNING ──────────────────────────────────────────────
+function renderLearningPage() {
+  const coin = document.getElementById('learn-coin')?.value || 'BTC';
+  const l = data[coin]?.learn || {};
+  if (!l.totalPredictions) { document.getElementById('learning-content').innerHTML = '<div class="empty">No learning data yet. The system learns after each completed 5-minute trade.</div>'; return; }
+
+  let html = `
+    <div class="sec">
+      <div class="sec-t"><span>LEARNING PROGRESS</span></div>
+      <div class="g4">
+        <div class="card"><div class="cl">PREDICTIONS</div><div class="cv" style="color:#627EEA">${l.totalPredictions}</div><div class="cn">total recorded</div></div>
+        <div class="card"><div class="cl">ACCURACY</div><div class="cv" style="color:${parseFloat(l.accuracy||50)>55?'#22c55e':'#ef4444'}">${l.accuracy||'—'}%</div></div>
+        <div class="card"><div class="cl">AVG PnL</div><div class="cv" style="color:${l.avgPnl?.startsWith('+')?'#22c55e':'#ef4444'};font-size:14px">${l.avgPnl||'—'}</div></div>
+        <div class="card"><div class="cl">NEXT RETRAIN</div><div class="cv" style="color:#f59e0b;font-size:14px">${l.nextTrainAt||'—'}</div><div class="cn">at N samples</div></div>
+      </div>
+    </div>`;
+
+  // Indicator accuracy rankings
+  if (l.indicatorAccuracy?.length) {
+    html += `<div class="sec"><div class="sec-t"><span>INDICATOR ACCURACY RANKINGS</span><span style="font-size:10px;color:#444">sorted by accuracy</span></div>`;
+    const sorted = [...l.indicatorAccuracy].sort((a,b)=>parseFloat(b.accuracy)-parseFloat(a.accuracy));
+    sorted.forEach(ind => {
+      const acc = parseFloat(ind.accuracy);
+      const color = acc > 60 ? '#22c55e' : acc > 50 ? '#f59e0b' : '#ef4444';
+      const w = parseFloat(ind.weight);
+      html += `<div class="ind-row">
+        <div style="width:120px;font-size:11px;color:#888">${ind.indicator}</div>
+        <div class="ind-bar"><div class="ind-fill" style="width:${acc}%;background:${color}"></div></div>
+        <div style="width:50px;text-align:right;font-size:12px;font-weight:800;color:${color}">${isNaN(acc)?'—':acc.toFixed(0)+'%'}</div>
+        <div style="width:40px;text-align:right;font-size:10px;color:#555">${ind.total}n</div>
+        <div style="width:50px;text-align:right"><span class="badge" style="background:${color}22;color:${color}">${w.toFixed(2)}×</span></div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Model log
+  if (l.modelLog?.length) {
+    html += `<div class="sec"><div class="sec-t"><span>XGBOOST TRAINING LOG</span></div>
+      <table><thead><tr><th>Version</th><th>Train Acc</th><th>WF Acc</th><th>Samples</th><th>Notes</th></tr></thead><tbody>
+        ${l.modelLog.map(m=>`<tr>
+          <td style="color:#627EEA">${m.version}</td>
+          <td style="color:${parseFloat(m.train_acc*100)>60?'#22c55e':'#888'}">${m.train_acc?(m.train_acc*100).toFixed(1)+'%':'—'}</td>
+          <td style="color:${parseFloat(m.val_acc*100)>55?'#22c55e':'#ef4444'}">${m.val_acc?(m.val_acc*100).toFixed(1)+'%':'—'}</td>
+          <td>${m.n_samples}</td>
+          <td style="color:#444;font-size:10px">${m.notes||'—'}</td>
+        </tr>`).join('')}
+      </tbody></table></div>`;
+  }
+
+  // WF results
+  if (l.wfResults?.length) {
+    html += `<div class="sec"><div class="sec-t"><span>WALK-FORWARD VALIDATION</span></div><div class="g5">
+      ${l.wfResults.slice(0,5).map(w=>`<div class="card">
+        <div class="cl">Window ${w.window||'—'}</div>
+        <div class="cv" style="color:${parseFloat(w.test_acc*100)>55?'#22c55e':'#ef4444'};font-size:16px">${w.test_acc?(w.test_acc*100).toFixed(1)+'%':'—'}</div>
+        <div class="cn">${w.test_n||'—'} test samples</div>
+      </div>`).join('')}
+    </div></div>`;
+  }
+
+  // Regime accuracy
+  if (l.regimeAccuracy?.length) {
+    html += `<div class="sec"><div class="sec-t"><span>ACCURACY BY REGIME</span></div><div class="g3">
+      ${l.regimeAccuracy.map(r=>`<div class="card">
+        <div class="cl">${r.regime.toUpperCase()}</div>
+        <div class="cv" style="color:${parseFloat(r.accuracy)>55?'#22c55e':'#ef4444'}">${r.accuracy}%</div>
+        <div class="cn">${r.total} samples</div>
+      </div>`).join('')}
+    </div></div>`;
+  }
+
+  document.getElementById('learning-content').innerHTML = html;
+}
+
+// ── SIGNAL FEED ───────────────────────────────────────────
+function renderSignalFeed() {
+  const el = document.getElementById('signal-feed');
+  let html = '';
+  ['BTC','ETH'].forEach(coin => {
+    const s = data.status?.[coin];
+    const pp = s?.pending_pred;
+    const sess = s?.session;
+    if (!s) return;
+    html += `<div class="signal-row">
+      <div>
+        <div style="font-size:14px;font-weight:800;color:${coin==='BTC'?'#F7931A':'#627EEA'}">${coin}</div>
+        <div style="font-size:11px;color:#555;margin-top:2px">$${fmt(s.last_price)} · ${s.prices_loaded} candles loaded</div>
+      </div>
+      ${pp?`<div style="text-align:center">
+        <div style="font-size:13px;font-weight:800;color:${sc(pp.signal)}">${si(pp.signal)} ${pp.signal} @ $${fmt(pp.entry)}</div>
+        <div style="font-size:10px;color:#555">⏱ checks in ${pp.checksIn}</div>
+      </div>`:`<div style="color:#333;font-size:11px">No active prediction</div>`}
+      <div style="text-align:right">
+        <div style="font-size:11px;color:${parseFloat(sess?.dailyPnl||0)>=0?'#22c55e':'#ef4444'}">${fmtPct((sess?.dailyPnl||0)*100,3)} today</div>
+        <div style="font-size:10px;color:#444">${sess?.tradesCount||0}/${sess?.config?.maxTradesPerDay||20} trades · ${sess?.dailyLimitHit?'🔴 limit hit':'🟢 active'}</div>
+      </div>
+    </div>`;
+  });
+  el.innerHTML = html || '<div class="empty">Server not connected</div>';
+}
+
+// ── SYSTEM STATUS ─────────────────────────────────────────
+function renderSystemStatus() {
+  const el = document.getElementById('system-status');
+  const s = data.status;
+  if (!s || !s.BTC) { el.innerHTML = '<div class="empty">Server offline</div>'; return; }
+  el.innerHTML = `<div class="g2">
+    ${['BTC','ETH'].map(coin=>`<div class="card" style="text-align:left">
+      <div style="font-weight:800;color:${coin==='BTC'?'#F7931A':'#627EEA'};margin-bottom:8px">${coin}</div>
+      <div style="font-size:11px;color:#555;line-height:1.8">
+        Prices loaded: <span style="color:#888">${s[coin].prices_loaded}</span><br>
+        Training samples: <span style="color:#627EEA">${s[coin].training_samples}</span><br>
+        XGBoost model: <span style="color:${s[coin].model_exists?'#22c55e':'#f59e0b'}">${s[coin].model_exists?'✓ Active':'⏳ Not trained yet'}</span><br>
+        Daily loss limit: <span style="color:${s[coin].session?.dailyLimitHit?'#ef4444':'#22c55e'}">${s[coin].session?.dailyLimitHit?'HIT':'OK'}</span>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+
+// ── REGIME ────────────────────────────────────────────────
+function renderRegimePage() {
+  let html = '';
+  ['BTC','ETH'].forEach(coin => {
+    const l = data[coin]?.learn || {};
+    const p = data[coin]?.paper || {};
+    const color = coin==='BTC'?'#F7931A':'#627EEA';
+    html += `<div class="sec" style="border-color:${color}25">
+      <div class="sec-t"><span style="color:${color}">${coin} REGIME BREAKDOWN</span></div>`;
+    if (p.byRegime && Object.keys(p.byRegime).length) {
+      html += `<div class="g3">`;
+      for (const [reg, stats] of Object.entries(p.byRegime)) {
+        const wr = stats.count > 0 ? (stats.wins/stats.count*100).toFixed(0) : 0;
+        html += `<div class="card">
+          <div class="cl">${reg.toUpperCase()}</div>
+          <div class="cv" style="color:${wr>50?'#22c55e':'#ef4444'}">${wr}% WR</div>
+          <div class="cn">${stats.count} trades · ${fmtPct(stats.pnl/100)} PnL</div>
+          <div class="bar-bg"><div class="bar-fill" style="width:${wr}%;background:${wr>50?'#22c55e':'#ef4444'}"></div></div>
+        </div>`;
+      }
+      html += `</div>`;
+    } else {
+      html += `<div class="empty">Not enough trades per regime yet</div>`;
+    }
+    html += `</div>`;
+  });
+  document.getElementById('regime-content').innerHTML = html;
+}
+
+// ── Equity curve mini chart ───────────────────────────────
+function drawEquityMini(canvasId, trades, startBalance) {
+  const cv = document.getElementById(canvasId);
+  if (!cv || !trades?.length) return;
+  const ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  const eq = [startBalance];
+  let bal = startBalance;
+  [...trades].reverse().forEach(t => { bal += t.net_pnl_usd; eq.push(bal); });
+  const mn = Math.min(...eq), mx = Math.max(...eq), range = mx - mn || 1;
+  const ty = v => H - 4 - ((v - mn) / range) * (H - 8);
+  const tx = i => 4 + (i / (eq.length - 1)) * (W - 8);
+  const up = eq[eq.length - 1] >= startBalance;
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, up ? '#22c55e35' : '#ef444435'); g.addColorStop(1, '#00000000');
+  ctx.beginPath(); eq.forEach((v, i) => i === 0 ? ctx.moveTo(tx(i), ty(v)) : ctx.lineTo(tx(i), ty(v)));
+  ctx.lineTo(tx(eq.length - 1), H); ctx.lineTo(tx(0), H); ctx.fillStyle = g; ctx.fill();
+  ctx.beginPath(); ctx.strokeStyle = up ? '#22c55e' : '#ef4444'; ctx.lineWidth = 2;
+  eq.forEach((v, i) => i === 0 ? ctx.moveTo(tx(i), ty(v)) : ctx.lineTo(tx(i), ty(v)));
+  ctx.stroke();
+}
+
+// Auto-refresh every 30s
+loadAll();
+setInterval(loadAll, 30000);
+</script>
+</body>
+</html>
