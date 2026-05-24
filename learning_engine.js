@@ -63,13 +63,15 @@ function recordOutcome(coin, predId, signal, indSignals, entryPrice, exitPrice, 
   const diff = exitPrice - entryPrice;
 
   // 1. Update the prediction row
-  stmts.updatePredictionResult.run({
-    id:          predId,
-    check_time:  Date.now(),
-    result_price: exitPrice,
-    result_pnl:  pnlPct,
-    correct:     correct ? 1 : 0,
-  });
+  try {
+    stmts.updatePredictionResult.run({
+      id:           predId,
+      check_time:   Date.now(),
+      result_price: exitPrice,
+      result_pnl:   pnlPct,
+      correct:      correct ? 1 : 0,
+    });
+  } catch(e) { console.error('[Learning] updatePredictionResult error:', e.message); }
 
   // 2. Record per-indicator outcomes
   if (indSignals && typeof indSignals === 'object') {
@@ -137,10 +139,10 @@ function recomputeWeights(coin) {
     }
   }
 
-  // Also apply global accuracy adjustment
+  // Global accuracy from predictions table (uses symbol column)
   const globalRow = db.prepare(`
     SELECT COUNT(*) as total, SUM(correct) as wins
-    FROM predictions WHERE coin=? AND checked=1
+    FROM predictions WHERE symbol=? AND checked=1
   `).get(coin);
 
   if (globalRow && globalRow.total >= 10) {
@@ -250,17 +252,23 @@ function trainXGBoost(coin) {
 // ── Get learning stats for API ────────────────────────────
 function getLearningStats(coin) {
   const weights    = loadWeights(coin);
-  const globalRow  = db.prepare(`SELECT COUNT(*) as total, SUM(correct) as wins, AVG(result_pnl) as avgPnl FROM predictions WHERE coin=? AND checked=1`).get(coin) || {};
+  const globalRow  = db.prepare(`SELECT COUNT(*) as total, SUM(correct) as wins, AVG(result_pnl) as avgPnl FROM predictions WHERE symbol=? AND checked=1`).get(coin) || {};
   const indRows    = db.prepare(`SELECT indicator, COUNT(*) as total, SUM(correct) as wins, AVG(pnl_pct) as avgPnl FROM indicator_outcomes WHERE coin=? GROUP BY indicator ORDER BY wins/COUNT(*) DESC`).all(coin);
   const modelLogs  = stmts.getModelLog.all({ symbol: coin });
   const wfRows     = db.prepare(`SELECT * FROM wf_results WHERE symbol=? ORDER BY timestamp DESC LIMIT 10`).all(coin);
+
+  // Regime accuracy — safely skipped if column missing
+  let regimeAccRows = [];
+  try {
+    regimeAccRows = db.prepare(`SELECT regime, COUNT(*) as total, SUM(correct) as wins FROM indicator_outcomes WHERE coin=? AND regime IS NOT NULL AND regime != '' GROUP BY regime`).all(coin);
+  } catch(e) { /* column not yet available */ }
 
   const accuracy = globalRow.total > 0 ? (globalRow.wins / globalRow.total * 100).toFixed(1) : null;
 
   // Regime-specific accuracy
   const regimeRows = db.prepare(`
     SELECT regime, COUNT(*) as total, SUM(correct) as wins
-    FROM predictions WHERE coin=? AND checked=1 AND regime IS NOT NULL
+    FROM predictions WHERE symbol=? AND checked=1 AND regime IS NOT NULL
     GROUP BY regime
   `).all(coin);
 
@@ -307,6 +315,14 @@ db.exec(`
     timestamp INTEGER NOT NULL
   );
 `);
+
+// Safely add regime column if it doesn't exist yet (for existing databases)
+try {
+  db.exec(`ALTER TABLE indicator_outcomes ADD COLUMN regime TEXT`);
+  console.log('[DB] Added regime column to indicator_outcomes');
+} catch(e) {
+  // Column already exists — ignore
+}
 
 module.exports = {
   loadWeights,
