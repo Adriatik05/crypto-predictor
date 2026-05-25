@@ -105,6 +105,15 @@ CREATE TABLE IF NOT EXISTS indicator_outcomes (
   regime TEXT,
   timestamp INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_predictions_symbol_checked_time
+ON predictions(symbol, checked, timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_features_symbol_timestamp
+ON features(symbol, timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_indicator_outcomes_coin_indicator
+ON indicator_outcomes(coin, indicator, timestamp);
 `);
 
 // ── Prepared statements ───────────────────────────────────

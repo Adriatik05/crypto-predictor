@@ -16,6 +16,7 @@ const fetch    = require('node-fetch');
 const { db }   = require('./database');
 const risk     = require('./risk_manager');
 const learning = require('./learning_engine');
+const { config } = require('./config');
 
 // ── Ensure paper trading tables exist ───────────────────
 db.exec(`
@@ -36,6 +37,7 @@ db.exec(`
     net_pnl_pct    REAL,
     net_pnl_usd    REAL,
     fee_paid       REAL,
+    correct        INTEGER,
     confidence     INTEGER,
     agreement      REAL,
     regime         TEXT,
@@ -53,8 +55,14 @@ db.exec(`
   );
 `);
 
+try {
+  db.exec(`ALTER TABLE paper_trades ADD COLUMN correct INTEGER`);
+} catch(e) {
+  // Existing databases already have the column.
+}
+
 // ── Paper trading account state ──────────────────────────
-const STARTING_BALANCE = 10000; // USD per coin
+const STARTING_BALANCE = config.paperTrading.startingBalanceUsd; // USD per coin
 
 function getBalance(coin) {
   const row = db.prepare(
@@ -161,9 +169,9 @@ async function checkOpenTrades(coin, currentPrice, currentHigh, currentLow) {
     else if (currentLow  <= trade.take_profit) { exitPrice = trade.take_profit; exitReason = 'take_profit'; }
   }
 
-  // Time-based close: close after 15 min if no SL/TP hit (3 candles)
+  // Time-based close if no SL/TP hit.
   const ageMinutes = (Date.now() - trade.opened_at) / 60000;
-  if (!exitPrice && ageMinutes >= 15) {
+  if (!exitPrice && ageMinutes >= config.paperTrading.timeoutMinutes) {
     exitPrice  = currentPrice;
     exitReason = 'timeout_15m';
   }
@@ -196,9 +204,9 @@ async function closeTrade(trade, exitPrice, exitReason, coin) {
     UPDATE paper_trades SET
       exit_price=?, closed_at=?, exit_reason=?,
       gross_pnl_pct=?, net_pnl_pct=?, net_pnl_usd=?,
-      fee_paid=?, status='closed'
+      fee_paid=?, correct=?, status='closed'
     WHERE id=?
-  `).run(realExit, Date.now(), exitReason, grossPnlPct, netPnlPct, netPnlUSD, totalFees, trade.id);
+  `).run(realExit, Date.now(), exitReason, grossPnlPct, netPnlPct, netPnlUSD, totalFees, correct, trade.id);
 
   // Update account balance
   const oldBalance = getBalance(coin);

@@ -7,9 +7,10 @@ const { db, stmts, insertCandlesBatch } = require('./database');
 const risk      = require('./risk_manager');
 const learning  = require('./learning_engine');
 const paper     = require('./paper_trader');
+const { config, coinSymbols, getCoinList, getCoinSymbol, getMarketUrl } = require('./config');
 
 const app  = express();
-const PORT = 3000;
+const PORT = process.env.PORT || config.server.port;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
@@ -17,8 +18,9 @@ app.use(express.static(path.join(__dirname)));
 // Serve crypto.html at root
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'crypto.html')));
 
-const COINS = ['BTC', 'ETH'];
-const SYMBOLS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT' };
+const COINS = getCoinList();
+const SYMBOLS = coinSymbols;
+const startedAt = Date.now();
 
 // ═══════════════════════════════════════════
 // INDICATOR CALCULATIONS
@@ -46,6 +48,7 @@ function detectRegime(prices,candles){
   return'neutral';
 }
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function isTradableSignal(signal){return signal==='UP'||signal==='DOWN';}
 
 // ── Build feature vector ─────────────────────────────────
 function buildFeatures(coin, prices, candles, ob) {
@@ -107,77 +110,147 @@ function generateRuleSignal(prices, candles, weights) {
   const rsi=calcWilderRSI(prices),e9=calcEMA(prices,9),e21=calcEMA(prices,21);
   const stoch=calcStochRSI(prices),macd=calcMACD(prices);
   const bb=calcBB(prices),vwap=calcVWAP(candles);
-  const adx=calcADX(candles),last=prices[prices.length-1];
+  const adx=calcADX(candles),atr=calcATR(candles)||0,last=prices[prices.length-1];
   const mom5=prices.length>5?((last-prices[prices.length-6])/prices[prices.length-6])*100:0;
+  const regime=detectRegime(prices,candles);
+  const atrPct=last>0?atr/last*100:0;
 
   let score=0,totalW=0,agreements=0,total=0;
   const indSignals={};
 
-  const add=(name,sig,w)=>{score+=sig*w;totalW+=w;total++;indSignals[name]=sig>=0?'UP':'DOWN';if(Math.sign(sig)===Math.sign(score)||total===1)agreements++;};
+  const add=(name,sig,w)=>{
+    if (!Number.isFinite(sig) || sig===0 || !w) return;
+    score+=sig*w;totalW+=w;total++;
+    indSignals[name]=sig>0?'UP':'DOWN';
+    if(Math.sign(sig)===Math.sign(score)||total===1)agreements++;
+  };
 
   add('wilderRsi', rsi<35?1:rsi>65?-1:(50-rsi)/20, weights.wilderRsi||2.5);
   add('emaCross',  e9>e21?1:-1, weights.emaCross||2.5);
   if(macd&&macd.length>1){const lm=macd[macd.length-1],pm=macd[macd.length-2];add('macd',lm.hist>0?0.8:-0.8,weights.macd||1.5);if(pm.macd<pm.signal&&lm.macd>=pm.signal){add('macdCross',1,weights.macdCross||2);}else if(pm.macd>pm.signal&&lm.macd<=pm.signal){add('macdCross',-1,weights.macdCross||2);}}
-  if(bb){add('bb',last<bb.lower?1:last>bb.upper?-1:0,weights.bb||1.5);}
-  add('stochRsi',stoch.k<20?1:stoch.k>80?-1:0,weights.stochRsi||2);
+  if(bb){
+    const bbPos=(last-bb.middle)/((bb.upper-bb.lower)/2||1);
+    const meanReversion=regime==='range'||regime==='volatile';
+    add('bb',meanReversion?clamp(-bbPos,-1,1):clamp(bbPos,-1,1),weights.bb||1.5);
+  }
+  add('stochRsi',stoch.k<20?1:stoch.k>80?-1:stoch.k>55?0.25:stoch.k<45?-0.25:0,weights.stochRsi||2);
   if(adx.adx>20){add('adx',adx.diPlus>adx.diMinus?0.6:-0.6,weights.adx||1.5);}
   if(vwap){add('vwap',last>vwap?0.5:-0.5,weights.vwap||1.2);}
   add('mom',clamp(mom5/0.4,-1,1),weights.mom||1);
+  if(regime==='bull')add('regime',0.45,weights.regime||2);
+  else if(regime==='bear')add('regime',-0.45,weights.regime||2);
+  else if(regime==='range'&&rsi>45&&rsi<55)add('regime',-Math.sign(mom5)*0.25,weights.regime||2);
 
   const rawScore=totalW>0?score/totalW:0;
-  const signal=rawScore>=0?'UP':'DOWN';
   const agreement=total>0?agreements/total:0;
-  const confidence=Math.round(clamp(50+Math.abs(rawScore)*55,20,97));
-  return{signal,confidence,rawScore,agreement,indSignals};
+  const minDirectionalScore=config.risk.minDirectionalScore ?? 0.18;
+  const noEdge=Math.abs(rawScore)<minDirectionalScore||agreement<0.45||atrPct<0.03;
+  const signal=noEdge?'SIDEWAYS':rawScore>=0?'UP':'DOWN';
+  const regimeBoost=(regime==='bull'||regime==='bear')?4:regime==='volatile'?-5:0;
+  const confidence=Math.round(clamp(noEdge?45:50+Math.abs(rawScore)*55+regimeBoost,20,97));
+  return{signal,confidence,rawScore,agreement,indSignals,regime,atrPct};
 }
 
 // ── Call Python XGBoost ──────────────────────────────────
 function runXGBoost(coin, featuresObj) {
   return new Promise((resolve) => {
     const { spawn } = require('child_process');
-    const proc = spawn('python', ['ml_predict.py'], { cwd: __dirname });
+    const pythonBin = process.env.PYTHON_BIN || 'python';
+    const proc = spawn(pythonBin, ['ml-predict.py'], { cwd: __dirname });
     let out='';
+    let settled = false;
     proc.stdout.on('data',d=>out+=d.toString());
     proc.stderr.on('data',()=>{});
-    proc.on('close',()=>{try{resolve(JSON.parse(out));}catch{resolve({error:'parse',signal:null,confidence:0});}});
-    proc.stdin.write(JSON.stringify({symbol:coin,features:featuresObj}));
-    proc.stdin.end();
+    proc.on('error',err=>{
+      settled = true;
+      resolve({error:`python_spawn_${err.code || 'failed'}`,signal:null,confidence:0});
+    });
+    proc.on('close',()=>{
+      if (settled) return;
+      try{resolve(JSON.parse(out));}catch{resolve({error:'parse',signal:null,confidence:0});}
+    });
+    try {
+      proc.stdin.write(JSON.stringify({symbol:coin,features:featuresObj}));
+      proc.stdin.end();
+    } catch(e) {
+      if (!settled) {
+        settled = true;
+        resolve({error:'python_stdin_failed',signal:null,confidence:0});
+      }
+    }
   });
 }
 
 // ── In-memory market state ────────────────────────────────
-const marketState = {
-  BTC:{prices:[],candles:[],ob:null},
-  ETH:{prices:[],candles:[],ob:null},
-};
+const marketState = Object.fromEntries(
+  COINS.map(coin => [coin, { prices: [], candles: [], ob: null }])
+);
 
 // ── Pending prediction tracker (5-min window) ───────────
-const pendingPreds = { BTC: null, ETH: null };
+const pendingPreds = Object.fromEntries(COINS.map(coin => [coin, []]));
+const marketHealth = Object.fromEntries(
+  COINS.map(coin => [coin, { ok: false, lastFetchAt: null, lastSuccessAt: null, lastError: null }])
+);
+
+function isSupportedCoin(coin) {
+  return COINS.includes(coin);
+}
+
+function getRequestedCoin(req, res) {
+  const coin = String(req.params.coin || '').toUpperCase();
+  if (!isSupportedCoin(coin)) {
+    res.status(400).json({ error: 'unsupported_coin', coin, supported: COINS });
+    return null;
+  }
+  return coin;
+}
+
+function parseLimit(value, fallback = 50, max = 500) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+}
+
+async function fetchJson(url, label) {
+  const response = await fetch(url);
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = body?.msg || body?.message || response.statusText;
+    throw new Error(`${label} HTTP ${response.status}: ${message}`);
+  }
+  return body;
+}
 
 async function checkPendingPredictions() {
   const now = Date.now();
   for (const coin of COINS) {
-    const p = pendingPreds[coin];
-    if (!p || p.checked) continue;
-    if (now < p.checkAt) continue; // not 5 min yet
+    const due = pendingPreds[coin].filter(p => !p.checked && now >= p.checkAt);
+    if (!due.length) continue;
 
     try {
-      const res  = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${SYMBOLS[coin]}`);
-      const data = await res.json();
+      const data = await fetchJson(getMarketUrl('/api/v3/ticker/price', { symbol: SYMBOLS[coin] }), `${coin} ticker`);
       const exitPrice = parseFloat(data.price);
-      const pnlPct  = p.signal === 'UP'
-        ? (exitPrice - p.entryPrice) / p.entryPrice
-        : (p.entryPrice - exitPrice) / p.entryPrice;
-      const netPnl  = pnlPct - (risk.DEFAULT_CONFIG.feePct * 2); // subtract round-trip fee
-      const correct = netPnl > 0;
+      for (const p of due) {
+        const grossMove = (exitPrice - p.entryPrice) / p.entryPrice;
+        const roundTripCost = risk.DEFAULT_CONFIG.feePct * 2;
+        const sidewaysBand = config.risk.sidewaysOutcomePct || config.risk.minExpectedEdgePct || 0.0015;
+        const netPnl = p.signal === 'UP'
+          ? grossMove - roundTripCost
+          : p.signal === 'DOWN'
+            ? -grossMove - roundTripCost
+            : sidewaysBand - Math.abs(grossMove);
+        const correct = p.signal === 'SIDEWAYS'
+          ? Math.abs(grossMove) <= sidewaysBand
+          : netPnl > 0;
 
-      learning.recordOutcome(coin, p.predId, p.signal, p.indSignals, p.entryPrice, exitPrice, correct, netPnl, p.regime);
-      risk.onTradeClose(coin, netPnl);
-      p.checked = true;
+        learning.recordOutcome(coin, p.predId, p.signal, p.indSignals, p.entryPrice, exitPrice, correct, netPnl, p.regime);
+        p.checked = true;
 
-      console.log(`[5m Check] ${coin} ${p.signal} entry:${p.entryPrice.toFixed(2)} exit:${exitPrice.toFixed(2)} net:${(netPnl*100).toFixed(3)}% ${correct?'✓':'✗'}`);
+        console.log(`[Shadow Check] ${coin} ${p.signal} entry:${p.entryPrice.toFixed(2)} exit:${exitPrice.toFixed(2)} score:${(netPnl*100).toFixed(3)}% ${correct?'ok':'miss'}`);
+      }
+      pendingPreds[coin] = pendingPreds[coin].filter(p => !p.checked);
     } catch(e) {
-      console.error(`[5m Check] ${coin} error:`, e.message);
+      console.error(`[Shadow Check] ${coin} error:`, e.message);
     }
   }
 }
@@ -188,7 +261,8 @@ async function checkPendingPredictions() {
 
 // GET /api/predict/:coin
 app.get('/api/predict/:coin', async (req, res) => {
-  const coin = req.params.coin.toUpperCase();
+  const coin = getRequestedCoin(req, res);
+  if (!coin) return;
   const s    = marketState[coin];
   if (!s || s.prices.length < 50)
     return res.json({ error:'not_ready', message:'Loading market data...' });
@@ -228,18 +302,32 @@ app.get('/api/predict/:coin', async (req, res) => {
     }
   }
 
+  const probs = xgb?.probs || {
+    UP: finalSignal==='UP'?finalConf:Math.round((100-finalConf)/2),
+    DOWN: finalSignal==='DOWN'?finalConf:Math.round((100-finalConf)/2),
+    SIDEWAYS: finalSignal==='SIDEWAYS'?finalConf:0,
+  };
+  const tradeSignal = isTradableSignal(finalSignal);
+  const adaptiveConfidence = learning.getAdaptiveConfidence(coin, regime, modelUsed);
+  const riskConfig = {
+    ...risk.DEFAULT_CONFIG,
+    minConfidence: adaptiveConfidence.minConfidence || risk.DEFAULT_CONFIG.minConfidence,
+  };
+
   // Risk check
-  const riskCheck = risk.shouldTrade(coin, finalSignal, finalConf, ruleSig.agreement, regime, price, 10000);
+  const riskCheck = tradeSignal
+    ? risk.shouldTrade(coin, finalSignal, finalConf, ruleSig.agreement, regime, price, config.trading.capitalUsd, riskConfig)
+    : { allowed: false, reasons: [`signal '${finalSignal}' is not tradable`] };
 
   // Kelly sizing
   const pnlStats  = stmts.getStats.get({ symbol: coin });
-  const hist      = stmts.getRecentPredictions.all({ symbol: coin, limit: 50 });
+  const hist      = stmts.getRecentPredictions.all({ symbol: coin, limit: 80 }).filter(h=>h.checked===1&&h.result_pnl!==null);
   const wins      = hist.filter(h=>h.correct===1);
   const losses    = hist.filter(h=>h.correct===0);
   const winRate   = hist.length>0?wins.length/hist.length:0.5;
   const avgWin    = wins.length>0?wins.reduce((a,b)=>a+Math.abs(b.result_pnl||0),0)/wins.length:0.005;
   const avgLoss   = losses.length>0?losses.reduce((a,b)=>a+Math.abs(b.result_pnl||0),0)/losses.length:0.005;
-  const kellySz   = risk.kellySize(10000, winRate, avgWin, avgLoss);
+  const kellySz   = risk.kellySize(config.trading.capitalUsd, winRate, avgWin, avgLoss);
 
   // Save prediction to DB
   let predId = null;
@@ -248,9 +336,9 @@ app.get('/api/predict/:coin', async (req, res) => {
       const predRow = stmts.insertPrediction.run({
         symbol:coin, timestamp:Date.now(), price,
         signal:finalSignal, confidence:finalConf,
-        prob_up:   xgb?.probs?.UP   || (finalSignal==='UP'?finalConf:100-finalConf),
-        prob_down: xgb?.probs?.DOWN || (finalSignal==='DOWN'?finalConf:100-finalConf),
-        prob_side: 0,
+        prob_up:   probs.UP || 0,
+        prob_down: probs.DOWN || 0,
+        prob_side: probs.SIDEWAYS || 0,
         ensemble_mom: ruleSig.rawScore,
         ensemble_mr: 0, ensemble_vol: 0,
         model_version: modelUsed,
@@ -261,23 +349,25 @@ app.get('/api/predict/:coin', async (req, res) => {
   }
 
   // Open paper trade if risk allows
-  if (riskCheck.allowed && predId) {
+  let tradeOpened = false;
+  if (tradeSignal && riskCheck.allowed && predId) {
     const openTrade = paper.getOpenTrade(coin);
     if (!openTrade) {
       paper.openTrade(coin, finalSignal, price, finalConf, ruleSig.agreement, regime, modelUsed, predId);
       risk.onTradeOpen(coin);
+      tradeOpened = true;
     }
   }
 
-  // Register pending 5-min check ONLY if risk allows
-  if (riskCheck.allowed && predId && !pendingPreds[coin]?.checked === false) {
-    pendingPreds[coin] = {
+  // Shadow-check every non-opened prediction so skipped/SIDEWAYS signals still teach the model.
+  if (predId && !tradeOpened) {
+    pendingPreds[coin].push({
       predId, signal: finalSignal, entryPrice: price,
       checkAt: Date.now() + 5 * 60 * 1000,
       indSignals: ruleSig.indSignals, regime, checked: false,
-    };
-    risk.onTradeOpen(coin);
-    console.log(`[Trade] ${coin} ${finalSignal} @ $${price.toFixed(2)} conf:${finalConf}% — check at ${new Date(Date.now()+5*60*1000).toLocaleTimeString()}`);
+    });
+    pendingPreds[coin] = pendingPreds[coin].slice(-100);
+    console.log(`[Shadow] ${coin} ${finalSignal} @ $${price.toFixed(2)} conf:${finalConf}% - check at ${new Date(Date.now()+5*60*1000).toLocaleTimeString()}`);
   }
 
   const session = risk.getSessionSummary(coin);
@@ -285,10 +375,12 @@ app.get('/api/predict/:coin', async (req, res) => {
   res.json({
     coin, price, signal: finalSignal, confidence: finalConf,
     model: modelUsed,
+    tradeSignal,
     riskAllowed: riskCheck.allowed,
     riskReasons: riskCheck.reasons,
+    adaptiveConfidence,
     kellySizeUSD: kellySz.toFixed(2),
-    probs: xgb?.probs || { UP: finalSignal==='UP'?finalConf:100-finalConf, DOWN: finalSignal==='DOWN'?finalConf:100-finalConf },
+    probs,
     agreement: ruleSig.agreement,
     xgb: xgb?.error ? null : xgb,
     features: { rsi:features.wilder_rsi, ema_trend:features.ema9>features.ema21?'bull':'bear', regime, cvd:features.cvd, tod:features.tod_session },
@@ -299,20 +391,23 @@ app.get('/api/predict/:coin', async (req, res) => {
 
 // GET /api/paper/:coin
 app.get('/api/paper/:coin', (req, res) => {
-  const coin = req.params.coin.toUpperCase();
+  const coin = getRequestedCoin(req, res);
+  if (!coin) return;
   res.json(paper.getPaperStats(coin));
 });
 
 // GET /api/learning/:coin
 app.get('/api/learning/:coin', (req, res) => {
-  const coin = req.params.coin.toUpperCase();
+  const coin = getRequestedCoin(req, res);
+  if (!coin) return;
   res.json(learning.getLearningStats(coin));
 });
 
 // GET /api/history/:coin
 app.get('/api/history/:coin', (req, res) => {
-  const coin  = req.params.coin.toUpperCase();
-  const limit = parseInt(req.query.limit) || 50;
+  const coin = getRequestedCoin(req, res);
+  if (!coin) return;
+  const limit = parseLimit(req.query.limit);
   const preds = stmts.getRecentPredictions.all({ symbol: coin, limit });
   const stats = stmts.getStats.get({ symbol: coin });
   const model = stmts.getModelLog.all({ symbol: coin });
@@ -321,7 +416,8 @@ app.get('/api/history/:coin', (req, res) => {
 
 // GET /api/risk/:coin
 app.get('/api/risk/:coin', (req, res) => {
-  const coin = req.params.coin.toUpperCase();
+  const coin = getRequestedCoin(req, res);
+  if (!coin) return;
   res.json(risk.getSessionSummary(coin));
 });
 
@@ -337,27 +433,53 @@ app.get('/api/status', (req, res) => {
       training_samples: count.count,
       model_exists:     fs.existsSync(path.join(__dirname, `model_${coin}.json`)),
       last_price:       s.prices[s.prices.length-1] || null,
-      pending_pred:     pendingPreds[coin] ? {
-        signal: pendingPreds[coin].signal,
-        entry:  pendingPreds[coin].entryPrice,
-        checksIn: Math.max(0, Math.round((pendingPreds[coin].checkAt - Date.now())/1000)) + 's',
-      } : null,
+      pending_shadow_checks: pendingPreds[coin].map(p => ({
+        signal: p.signal,
+        entry: p.entryPrice,
+        checksIn: Math.max(0, Math.round((p.checkAt - Date.now())/1000)) + 's',
+      })),
       session: risk.getSessionSummary(coin),
+      market: marketHealth[coin],
     };
   }
   res.json(out);
 });
 
+// GET /api/health
+app.get('/api/health', (req, res) => {
+  const marketOk = COINS.every(coin => marketHealth[coin]?.ok);
+  res.status(marketOk ? 200 : 503).json({
+    ok: marketOk,
+    uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+    coins: COINS,
+    market: marketHealth,
+  });
+});
+
+// GET /api/config
+app.get('/api/config', (req, res) => {
+  res.json({
+    server: { port: PORT },
+    marketData: config.marketData,
+    trading: config.trading,
+    paperTrading: config.paperTrading,
+    coins: config.coins,
+    risk: risk.DEFAULT_CONFIG,
+  });
+});
+
 // POST /api/train/:coin
 app.post('/api/train/:coin', (req, res) => {
-  const coin = req.params.coin.toUpperCase();
+  const coin = getRequestedCoin(req, res);
+  if (!coin) return;
   res.json({ status:'started', coin });
   learning.trainXGBoost(coin);
 });
 
 // POST /api/walkforward/:coin
 app.post('/api/walkforward/:coin', (req, res) => {
-  const coin = req.params.coin.toUpperCase();
+  const coin = getRequestedCoin(req, res);
+  if (!coin) return;
   const wf   = learning.runWalkForward(coin);
   res.json(wf || { error: 'not_enough_data' });
 });
@@ -366,20 +488,49 @@ app.post('/api/walkforward/:coin', (req, res) => {
 // MARKET DATA FETCH
 // ═══════════════════════════════════════════
 async function fetchMarketData(coin) {
-  const sym = SYMBOLS[coin];
+  const sym = getCoinSymbol(coin);
+  if (!sym) return;
+  marketHealth[coin].lastFetchAt = Date.now();
   try {
-    const [klRes, obRes] = await Promise.all([
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1m&limit=500`),
-      fetch(`https://api.binance.com/api/v3/depth?symbol=${sym}&limit=20`),
+    const [klines, ob] = await Promise.all([
+      fetchJson(getMarketUrl('/api/v3/klines', {
+        symbol: sym,
+        interval: config.marketData.candleInterval,
+        limit: config.marketData.candleLimit,
+      }), `${coin} klines`),
+      fetchJson(getMarketUrl('/api/v3/depth', {
+        symbol: sym,
+        limit: config.marketData.depthLimit,
+      }), `${coin} depth`),
     ]);
-    const klines = await klRes.json();
-    const ob     = await obRes.json();
+
+    if (!Array.isArray(klines) || klines.length === 0) {
+      throw new Error(`${coin} klines response was empty or malformed`);
+    }
+    if (!Array.isArray(ob?.bids) || !Array.isArray(ob?.asks)) {
+      throw new Error(`${coin} order book response was malformed`);
+    }
+
     marketState[coin].prices  = klines.map(k => parseFloat(k[4]));
     marketState[coin].candles = klines.map(k => ({ open:parseFloat(k[1]),high:parseFloat(k[2]),low:parseFloat(k[3]),close:parseFloat(k[4]),volume:parseFloat(k[5]) }));
     marketState[coin].ob = ob;
     // Persist candles
-    insertCandlesBatch(klines.map(k => ({ symbol:coin, interval:'1m', open_time:parseInt(k[0]), open:parseFloat(k[1]),high:parseFloat(k[2]),low:parseFloat(k[3]),close:parseFloat(k[4]),volume:parseFloat(k[5]) })));
-  } catch(e) { console.error(`[Fetch] ${coin}:`, e.message); }
+    insertCandlesBatch(klines.map(k => ({ symbol:coin, interval:config.marketData.candleInterval, open_time:parseInt(k[0]), open:parseFloat(k[1]),high:parseFloat(k[2]),low:parseFloat(k[3]),close:parseFloat(k[4]),volume:parseFloat(k[5]) })));
+    marketHealth[coin] = {
+      ok: true,
+      lastFetchAt: marketHealth[coin].lastFetchAt,
+      lastSuccessAt: Date.now(),
+      lastError: null,
+    };
+  } catch(e) {
+    marketHealth[coin] = {
+      ok: false,
+      lastFetchAt: marketHealth[coin].lastFetchAt,
+      lastSuccessAt: marketHealth[coin].lastSuccessAt,
+      lastError: e.message,
+    };
+    console.error(`[Fetch] ${coin}:`, e.message);
+  }
 }
 
 // ═══════════════════════════════════════════

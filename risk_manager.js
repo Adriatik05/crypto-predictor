@@ -6,6 +6,7 @@
  */
 
 const { stmts, db } = require('./database');
+const { config } = require('./config');
 
 // ── Default risk config ───────────────────────────────────
 const DEFAULT_CONFIG = {
@@ -29,13 +30,18 @@ const DEFAULT_CONFIG = {
 
   // Minimum edge after fees
   minExpectedEdgePct: 0.003,  // signal must show >0.3% expected edge to enter
+  ...config.risk,
 };
 
 // ── In-memory session state (reset daily) ────────────────
-const session = {
-  BTC: { dailyPnl: 0, tradesCount: 0, openPositions: 0, lastTradeTime: 0, dailyReset: '' },
-  ETH: { dailyPnl: 0, tradesCount: 0, openPositions: 0, lastTradeTime: 0, dailyReset: '' },
-};
+const session = {};
+
+function getSession(coin) {
+  if (!session[coin]) {
+    session[coin] = { dailyPnl: 0, tradesCount: 0, openPositions: 0, lastTradeTime: 0, dailyReset: '' };
+  }
+  return session[coin];
+}
 
 function getToday() {
   return new Date().toISOString().slice(0, 10);
@@ -43,10 +49,11 @@ function getToday() {
 
 function resetDailyIfNeeded(coin) {
   const today = getToday();
-  if (session[coin].dailyReset !== today) {
-    session[coin].dailyPnl    = 0;
-    session[coin].tradesCount = 0;
-    session[coin].dailyReset  = today;
+  const s = getSession(coin);
+  if (s.dailyReset !== today) {
+    s.dailyPnl    = 0;
+    s.tradesCount = 0;
+    s.dailyReset  = today;
     console.log(`[Risk] ${coin} daily session reset for ${today}`);
   }
 }
@@ -54,8 +61,12 @@ function resetDailyIfNeeded(coin) {
 // ── Main gate: should we trade this signal? ──────────────
 function shouldTrade(coin, signal, confidence, agreement, regime, price, capital, config = DEFAULT_CONFIG) {
   resetDailyIfNeeded(coin);
-  const s = session[coin];
+  const s = getSession(coin);
   const reasons = [];
+
+  if (!['UP', 'DOWN'].includes(signal)) {
+    reasons.push(`signal '${signal}' is not tradable`);
+  }
 
   // 1. Confidence gate
   if (confidence < config.minConfidence) {
@@ -135,21 +146,23 @@ function getRealEntryPrice(signal, marketPrice, config = DEFAULT_CONFIG) {
 // ── Record trade open ─────────────────────────────────────
 function onTradeOpen(coin) {
   resetDailyIfNeeded(coin);
-  session[coin].openPositions++;
-  session[coin].tradesCount++;
-  session[coin].lastTradeTime = Date.now();
+  const s = getSession(coin);
+  s.openPositions++;
+  s.tradesCount++;
+  s.lastTradeTime = Date.now();
 }
 
 // ── Record trade close ────────────────────────────────────
 function onTradeClose(coin, pnlPct) {
-  session[coin].openPositions = Math.max(0, session[coin].openPositions - 1);
-  session[coin].dailyPnl     += pnlPct;
+  const s = getSession(coin);
+  s.openPositions = Math.max(0, s.openPositions - 1);
+  s.dailyPnl     += pnlPct;
 }
 
 // ── Get session summary ───────────────────────────────────
 function getSessionSummary(coin) {
   resetDailyIfNeeded(coin);
-  const s = session[coin];
+  const s = getSession(coin);
   const cfg = DEFAULT_CONFIG;
   return {
     dailyPnl:          s.dailyPnl,
@@ -165,8 +178,7 @@ function getSessionSummary(coin) {
 
 // ── Slippage model (tiered by order size) ────────────────
 function estimateSlippage(coin, orderSizeUSD) {
-  // BTC has deeper liquidity than ETH
-  const base = coin === 'BTC' ? 0.0002 : 0.0004;
+  const base = config.coins[coin]?.slippageBasePct || DEFAULT_CONFIG.slippagePct;
   if (orderSizeUSD < 1000)   return base;
   if (orderSizeUSD < 10000)  return base * 1.5;
   if (orderSizeUSD < 100000) return base * 3;

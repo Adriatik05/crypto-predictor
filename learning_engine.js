@@ -18,6 +18,7 @@
 const { db, stmts } = require('./database');
 const { spawn }     = require('child_process');
 const path          = require('path');
+const { config }    = require('./config');
 
 // ── Minimum samples before XGBoost trains ────────────────
 const MIN_XGB_SAMPLES   = 30;   // train first model
@@ -236,12 +237,94 @@ function checkAndRetrain(coin) {
 }
 
 // ── Spawn XGBoost training ────────────────────────────────
+function summarizeRows(rows) {
+  const total = rows.length;
+  if (!total) return { total: 0, wins: 0, winRate: null, avgPnl: null };
+  const wins = rows.filter(r => r.correct === 1).length;
+  const avgPnl = rows.reduce((sum, row) => sum + (row.result_pnl || 0), 0) / total;
+  return { total, wins, winRate: wins / total, avgPnl };
+}
+
+function getRecentOutcomeRows(coin, limit) {
+  return db.prepare(`
+    SELECT p.*, f.regime
+    FROM predictions p
+    LEFT JOIN features f ON p.feature_id = f.id
+    WHERE p.symbol=? AND p.checked=1 AND p.result_pnl IS NOT NULL
+    ORDER BY p.check_time DESC, p.timestamp DESC
+    LIMIT ?
+  `).all(coin, limit);
+}
+
+function scoreAdaptiveStats(stats, cfg) {
+  if (!stats.total || stats.total < cfg.minSamples) {
+    return { adjustment: 0, reason: `need ${cfg.minSamples - stats.total} more samples`, active: false };
+  }
+
+  const winGap = cfg.targetWinRate - stats.winRate;
+  const pnlGap = cfg.minAvgPnlPct - stats.avgPnl;
+  let adjustment = 0;
+  const reasons = [];
+
+  if (winGap > 0) {
+    const winPenalty = Math.min(cfg.maxPenalty, Math.ceil(winGap * 40));
+    adjustment += winPenalty;
+    reasons.push(`win ${(stats.winRate * 100).toFixed(1)}% < target ${(cfg.targetWinRate * 100).toFixed(1)}%`);
+  } else if (winGap < -0.08 && stats.avgPnl > cfg.minAvgPnlPct) {
+    const bonus = Math.min(cfg.maxBonus, Math.floor(Math.abs(winGap) * 20));
+    adjustment -= bonus;
+    if (bonus > 0) reasons.push(`strong win rate ${(stats.winRate * 100).toFixed(1)}%`);
+  }
+
+  if (pnlGap > 0) {
+    const pnlPenalty = Math.min(cfg.maxPenalty, Math.ceil((pnlGap / Math.max(cfg.minAvgPnlPct, 0.0001)) * 3));
+    adjustment += pnlPenalty;
+    reasons.push(`avg pnl ${(stats.avgPnl * 100).toFixed(3)}% below target`);
+  }
+
+  adjustment = Math.max(-cfg.maxBonus, Math.min(cfg.maxPenalty, adjustment));
+  return { adjustment, reason: reasons.join('; ') || 'recent edge acceptable', active: true };
+}
+
+function getAdaptiveConfidence(coin, regime, modelVersion) {
+  const cfg = config.risk.adaptiveConfidence;
+  if (!cfg || !cfg.enabled) {
+    return { enabled: false, adjustment: 0, minConfidence: config.risk.minConfidence };
+  }
+
+  const rows = getRecentOutcomeRows(coin, cfg.lookback);
+  const globalStats = summarizeRows(rows);
+  const regimeRows = regime ? rows.filter(r => r.regime === regime) : [];
+  const modelRows = modelVersion ? rows.filter(r => r.model_version === modelVersion) : [];
+
+  const globalScore = scoreAdaptiveStats(globalStats, cfg);
+  const regimeStats = summarizeRows(regimeRows);
+  const regimeScore = regime ? scoreAdaptiveStats(regimeStats, cfg) : { adjustment: 0, reason: 'no regime selected', active: false };
+  const modelStats = summarizeRows(modelRows);
+  const modelScore = modelVersion ? scoreAdaptiveStats(modelStats, cfg) : { adjustment: 0, reason: 'no model selected', active: false };
+  const adjustment = Math.max(globalScore.adjustment, regimeScore.adjustment, modelScore.adjustment);
+
+  return {
+    enabled: true,
+    adjustment,
+    minConfidence: Math.max(1, Math.min(99, config.risk.minConfidence + adjustment)),
+    global: { ...globalStats, ...globalScore },
+    regime: { name: regime, ...regimeStats, ...regimeScore },
+    model: { name: modelVersion, ...modelStats, ...modelScore },
+  };
+}
+
 function trainXGBoost(coin) {
   return new Promise((resolve) => {
-    const proc = spawn('python', ['ml_train.py', coin], { cwd: path.join(__dirname) });
+    const pythonBin = process.env.PYTHON_BIN || 'python';
+    const proc = spawn(pythonBin, ['ml-train.py', coin], { cwd: path.join(__dirname) });
     let out = '';
     proc.stdout.on('data', d => { out += d.toString(); process.stdout.write(`[XGB-${coin}] ${d}`); });
     proc.stderr.on('data', d => { /* suppress sklearn warnings */ });
+    proc.on('error', err => {
+      console.error(`[XGB-${coin}] failed to start Python (${err.code || err.message})`);
+      resolve(out);
+    });
     proc.on('close', code => {
       console.log(`[XGB-${coin}] training done (exit ${code})`);
       resolve(out);
@@ -256,6 +339,7 @@ function getLearningStats(coin) {
   const indRows    = db.prepare(`SELECT indicator, COUNT(*) as total, SUM(correct) as wins, AVG(pnl_pct) as avgPnl FROM indicator_outcomes WHERE coin=? GROUP BY indicator ORDER BY wins/COUNT(*) DESC`).all(coin);
   const modelLogs  = stmts.getModelLog.all({ symbol: coin });
   const wfRows     = db.prepare(`SELECT * FROM wf_results WHERE symbol=? ORDER BY timestamp DESC LIMIT 10`).all(coin);
+  const adaptiveConfidence = getAdaptiveConfidence(coin, null, null);
 
   // Regime accuracy — safely skipped if column missing
   let regimeAccRows = [];
@@ -267,9 +351,11 @@ function getLearningStats(coin) {
 
   // Regime-specific accuracy
   const regimeRows = db.prepare(`
-    SELECT regime, COUNT(*) as total, SUM(correct) as wins
-    FROM predictions WHERE symbol=? AND checked=1 AND regime IS NOT NULL
-    GROUP BY regime
+    SELECT f.regime, COUNT(*) as total, SUM(p.correct) as wins
+    FROM predictions p
+    JOIN features f ON p.feature_id = f.id
+    WHERE p.symbol=? AND p.checked=1 AND f.regime IS NOT NULL
+    GROUP BY f.regime
   `).all(coin);
 
   return {
@@ -292,6 +378,7 @@ function getLearningStats(coin) {
     })),
     modelLog:  modelLogs,
     wfResults: wfRows,
+    adaptiveConfidence,
     nextTrainAt: MIN_XGB_SAMPLES + Math.ceil(((globalRow.total || 0) - MIN_XGB_SAMPLES) / RETRAIN_INTERVAL + 1) * RETRAIN_INTERVAL,
   };
 }
@@ -334,4 +421,5 @@ module.exports = {
   trainXGBoost,
   checkAndRetrain,
   getLearningStats,
+  getAdaptiveConfidence,
 };

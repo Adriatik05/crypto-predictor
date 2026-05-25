@@ -1,0 +1,55 @@
+{
+  "server": {
+    "port": 3000
+  },
+  "marketData": {
+    "provider": "binance",
+    "baseUrl": "https://api.binance.com",
+    "candleInterval": "1m",
+    "candleLimit": 500,
+    "depthLimit": 20
+  },
+  "trading": {
+    "capitalUsd": 10000
+  },
+  "paperTrading": {
+    "startingBalanceUsd": 10000,
+    "timeoutMinutes": 15
+  },
+  "coins": {
+    "BTC": {
+      "symbol": "BTCUSDT",
+      "slippageBasePct": 0.0002
+    },
+    "ETH": {
+      "symbol": "ETHUSDT",
+      "slippageBasePct": 0.0004
+    }
+  },
+  "risk": {
+    "stopLossPct": 0.005,
+    "takeProfitPct": 0.01,
+    "maxPositionPct": 0.1,
+    "feePct": 0.001,
+    "slippagePct": 0.0005,
+    "dailyLossLimitPct": 0.02,
+    "maxOpenPositions": 1,
+    "maxTradesPerDay": 20,
+    "minConfidence": 72,
+    "minAgreement": 0.8,
+    "minRegimes": ["bull", "bear"],
+    "requireMACDCross": false,
+    "minExpectedEdgePct": 0.003,
+    "minDirectionalScore": 0.18,
+    "sidewaysOutcomePct": 0.0015,
+    "adaptiveConfidence": {
+      "enabled": true,
+      "lookback": 60,
+      "minSamples": 8,
+      "maxPenalty": 12,
+      "maxBonus": 4,
+      "targetWinRate": 0.55,
+      "minAvgPnlPct": 0.0005
+    }
+  }
+}

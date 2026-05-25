@@ -5,8 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "train-btc": "python ml_train.py BTC",
-    "train-eth": "python ml_train.py ETH"
+    "train-btc": "node -e \"require('./learning_engine').trainXGBoost('BTC').then(()=>process.exit(0))\"",
+    "train-eth": "node -e \"require('./learning_engine').trainXGBoost('ETH').then(()=>process.exit(0))\""
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
