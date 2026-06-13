@@ -79,6 +79,7 @@
 </div>
 <script>
 const COINS={BTC:{symbol:"BTCUSDT",color:"#F7931A",label:"Bitcoin (BTC)",cls:"btc"},ETH:{symbol:"ETHUSDT",color:"#627EEA",label:"Ethereum (ETH)",cls:"eth"}};
+const API = location.protocol === 'file:' ? 'http://localhost:3000/api' : '/api';
 
 // ── Storage ──────────────────────────────────────────────
 const DW={rsi:2,wilderRsi:2.5,ema:2,emaCross:2.5,macd:1.5,macdCross:2,bb:1.5,adx:1.5,vwap:1.2,vdelta:1,ob:1.5,mtf:1.5,mom:1,pattern:2.5,spike:1.5,stochRsi:2,williamsR:1.5,cci:1.5,regime:2,tod:1,cvd:1.8,liq:2,orderFlow:2,lstm:2.5,rl:2};
@@ -933,36 +934,35 @@ function updateWSBadge(key,connected){const b=document.getElementById(`ws-badge-
 // FETCH + INIT
 // ═══════════════════════════════════════════
 async function loadREST(key){
-  const coin=COINS[key];
   try{
-    const [k1,k5,k15,tkr,ob]=await Promise.all([
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${coin.symbol}&interval=1m&limit=500`),
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${coin.symbol}&interval=5m&limit=500`),
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${coin.symbol}&interval=15m&limit=500`),
-      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${coin.symbol}`),
-      fetch(`https://api.binance.com/api/v3/depth?symbol=${coin.symbol}&limit=20`)
-    ]);
-    const klines=await k1.json(),k5d=await k5.json(),k15d=await k15.json();
-    state[key].ticker=await tkr.json();state[key].ob=await ob.json();
+    const res=await fetch(`${API}/market/${key}`);
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.message||data.error||'Market data failed');
+    const klines=data.klines1m,k5d=data.klines5m,k15d=data.klines15m;
+    state[key].ticker=data.ticker;state[key].ob=data.depth;
     state[key].prices=klines.map(k=>parseFloat(k[4]));
     state[key].candles=klines.map(k=>({open:parseFloat(k[1]),high:parseFloat(k[2]),low:parseFloat(k[3]),close:parseFloat(k[4]),volume:parseFloat(k[5])}));
     state[key].tf={'1m':getMTFSignal(klines.map(k=>parseFloat(k[4]))),'5m':getMTFSignal(k5d.map(k=>parseFloat(k[4]))),'15m':getMTFSignal(k15d.map(k=>parseFloat(k[4])))};
     return true;
-  }catch(e){return false;}
+  }catch(e){state[key].lastError=e.message;return false;}
 }
 async function refreshREST(key){
-  const coin=COINS[key];
   try{
-    const [tkr,ob]=await Promise.all([fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${coin.symbol}`),fetch(`https://api.binance.com/api/v3/depth?symbol=${coin.symbol}&limit=20`)]);
-    state[key].ticker=await tkr.json();state[key].ob=await ob.json();
+    const res=await fetch(`${API}/market/${key}`);
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.message||data.error||'Market data failed');
+    state[key].ticker=data.ticker;state[key].ob=data.depth;
+    const klines=data.klines1m;
+    state[key].prices=klines.map(k=>parseFloat(k[4]));
+    state[key].candles=klines.map(k=>({open:parseFloat(k[1]),high:parseFloat(k[2]),low:parseFloat(k[3]),close:parseFloat(k[4]),volume:parseFloat(k[5])}));
     if(key===currentTab)renderPanel(key,'live');
-  }catch{}
+  }catch(e){state[key].lastError=e.message;if(key===currentTab)renderPanel(key,'error',e.message);}
   fetchArbitrageData(key);
 }
 async function init(key){
   renderPanel(key,'connecting');
   const ok=await loadREST(key);
-  if(!ok){renderPanel(key,'error','Could not reach Binance API.');return;}
+  if(!ok){renderPanel(key,'error',state[key].lastError||`Could not reach backend market API at ${API}. Start node server.js and open http://localhost:3000/crypto.html`);return;}
   renderPanel(key,'live');
   connectWS(key);
   fetchArbitrageData(key);
@@ -975,7 +975,7 @@ Object.keys(COINS).forEach(key=>init(key));
 // crypto.html runs client-side only; this call lets the server
 // do paper trading and feed the dashboard without blocking the UI.
 async function pingServerPredict(key){
-  try{ await fetch(`/api/predict/${key}`); }catch(e){}
+  try{ await fetch(`${API}/predict/${key}`); }catch(e){}
 }
 setInterval(()=>{ Object.keys(COINS).forEach(key=>pingServerPredict(key)); }, 5*60*1000);
 

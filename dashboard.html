@@ -107,7 +107,7 @@
 </div>
 
 <script>
-const API = '/api';
+const API = location.protocol === 'file:' ? 'http://localhost:3000/api' : '/api';
 let data = { BTC:{}, ETH:{}, status:{} };
 
 function showPage(id) {
@@ -117,11 +117,16 @@ function showPage(id) {
   event.target.classList.add('active');
 }
 
-function sc(s){return s==='UP'?'#22c55e':'#ef4444';}
+function sc(s){return s==='UP'?'#22c55e':s==='DOWN'?'#ef4444':'#f59e0b';}
 function si(s){return s==='UP'?'▲':'▼';}
 function fmt(n,d=2){return n!=null?parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}):'—';}
 function fmtPct(v,d=2){const n=parseFloat(v);return isNaN(n)?'—':`${n>=0?'+':''}${n.toFixed(d)}%`;}
 function pnlColor(v){return parseFloat(v)>=0?'#22c55e':'#ef4444';}
+function marketStatus(s){
+  if (!s) return '<span style="color:#ef4444">no status</span>';
+  if (s.market?.ok) return '<span style="color:#22c55e">market connected</span>';
+  return `<span style="color:#ef4444">${s.market?.lastError || 'market data not loaded'}</span>`;
+}
 
 async function loadAll() {
   try {
@@ -133,10 +138,11 @@ async function loadAll() {
       fetch(`${API}/status`).then(r=>r.json()).catch(()=>({})),
     ]);
     data = { BTC:{paper:btcPaper,learn:btcLearn}, ETH:{paper:ethPaper,learn:ethLearn}, status };
-    document.getElementById('last-updated').textContent = `Last updated: ${new Date().toLocaleTimeString()} · Auto-refresh 30s`;
+    const source = API.startsWith('http') ? API : 'local server';
+    document.getElementById('last-updated').textContent = `Last updated: ${new Date().toLocaleTimeString()} · ${source} · Auto-refresh 30s`;
     renderAll();
   } catch(e) {
-    document.getElementById('last-updated').textContent = 'Server offline — start with: node server.js';
+    document.getElementById('last-updated').textContent = `Server offline - start with: node server.js (${API})`;
   }
 }
 
@@ -159,6 +165,7 @@ function renderOverview() {
     const acc = parseFloat(l.accuracy||50);
     const color = coin==='BTC'?'#F7931A':'#627EEA';
 
+    const marketLine = marketStatus(s);
     document.getElementById(`overview-${coin.toLowerCase()}`).innerHTML = `
       <div class="sec" style="border-color:${color}25">
         <div class="sec-t">
@@ -174,6 +181,9 @@ function renderOverview() {
           <div class="card"><div class="cl">SHARPE</div><div class="cv" style="color:${parseFloat(p.sharpe||0)>1?'#22c55e':parseFloat(p.sharpe||0)>0?'#f59e0b':'#ef4444'}">${p.sharpe||'—'}</div><div class="cn">risk-adjusted</div></div>
           <div class="card"><div class="cl">MAX DD</div><div class="cv" style="color:${parseFloat(p.maxDD||0)<5?'#22c55e':'#ef4444'}">-${p.maxDD||0}%</div><div class="cn">drawdown</div></div>
           <div class="card"><div class="cl">TRAINING</div><div class="cv" style="color:#627EEA;font-size:15px">${l.totalPredictions||0}</div><div class="cn">samples</div></div>
+        </div>
+        <div style="margin-top:10px;padding:9px 12px;background:#13181f;border-radius:10px;font-size:11px;color:#666">
+          Backend market feed: ${marketLine} · candles loaded: ${s.prices_loaded||0} · last price: $${fmt(s.last_price)}
         </div>
         ${p.openTrade?`<div style="margin-top:10px;padding:10px 14px;background:#13181f;border-radius:10px;border:1px solid ${sc(p.openTrade.signal)}40;display:flex;justify-content:space-between;align-items:center">
           <div><span style="color:${sc(p.openTrade.signal)};font-weight:800;font-size:14px">${si(p.openTrade.signal)} OPEN ${p.openTrade.signal}</span><span style="color:#555;font-size:10px;margin-left:10px">since ${new Date(p.openTrade.opened_at).toLocaleTimeString()}</span></div>
@@ -347,6 +357,7 @@ function renderSystemStatus() {
       <div style="font-weight:800;color:${coin==='BTC'?'#F7931A':'#627EEA'};margin-bottom:8px">${coin}</div>
       <div style="font-size:11px;color:#555;line-height:1.8">
         Prices loaded: <span style="color:#888">${s[coin].prices_loaded}</span><br>
+        Market feed: ${marketStatus(s[coin])}<br>
         Training samples: <span style="color:#627EEA">${s[coin].training_samples}</span><br>
         XGBoost model: <span style="color:${s[coin].model_exists?'#22c55e':'#f59e0b'}">${s[coin].model_exists?'✓ Active':'⏳ Not trained yet'}</span><br>
         Daily loss limit: <span style="color:${s[coin].session?.dailyLimitHit?'#ef4444':'#22c55e'}">${s[coin].session?.dailyLimitHit?'HIT':'OK'}</span>

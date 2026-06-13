@@ -39,7 +39,7 @@ SIDEWAYS_PNL_THRESHOLD = 0.0015
 def load_data():
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query("""
-        SELECT f.*, p.signal, p.correct, p.result_pnl
+        SELECT f.*, p.price, p.signal, p.correct, p.result_price, p.result_pnl
         FROM features f
         JOIN predictions p ON p.feature_id = f.id
         WHERE f.symbol=? AND p.checked=1 AND p.result_pnl IS NOT NULL

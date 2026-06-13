@@ -1,7 +1,7 @@
 """
 XGBoost inference — called by server.js via child_process.
 Reads features from stdin as JSON, writes prediction to stdout as JSON.
-Usage: echo '{"symbol":"BTC","features":{...}}' | python ml_predict.py
+Usage: echo '{"symbol":"BTC","features":{...}}' | python ml-predict.py
 """
 import sys, json, os
 import numpy as np

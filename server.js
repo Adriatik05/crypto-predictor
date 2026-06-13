@@ -221,6 +221,28 @@ async function fetchJson(url, label) {
   return body;
 }
 
+async function fetchMarketBundle(coin) {
+  const sym = getCoinSymbol(coin);
+  if (!sym) throw new Error(`Unsupported coin ${coin}`);
+
+  const [klines1m, klines5m, klines15m, ticker, depth] = await Promise.all([
+    fetchJson(getMarketUrl('/api/v3/klines', { symbol: sym, interval: '1m', limit: config.marketData.candleLimit }), `${coin} 1m klines`),
+    fetchJson(getMarketUrl('/api/v3/klines', { symbol: sym, interval: '5m', limit: config.marketData.candleLimit }), `${coin} 5m klines`),
+    fetchJson(getMarketUrl('/api/v3/klines', { symbol: sym, interval: '15m', limit: config.marketData.candleLimit }), `${coin} 15m klines`),
+    fetchJson(getMarketUrl('/api/v3/ticker/24hr', { symbol: sym }), `${coin} ticker`),
+    fetchJson(getMarketUrl('/api/v3/depth', { symbol: sym, limit: config.marketData.depthLimit }), `${coin} depth`),
+  ]);
+
+  if (!Array.isArray(klines1m) || !Array.isArray(klines5m) || !Array.isArray(klines15m)) {
+    throw new Error(`${coin} kline response was malformed`);
+  }
+  if (!Array.isArray(depth?.bids) || !Array.isArray(depth?.asks)) {
+    throw new Error(`${coin} order book response was malformed`);
+  }
+
+  return { coin, symbol: sym, klines1m, klines5m, klines15m, ticker, depth };
+}
+
 async function checkPendingPredictions() {
   const now = Date.now();
   for (const coin of COINS) {
@@ -466,6 +488,24 @@ app.get('/api/config', (req, res) => {
     coins: config.coins,
     risk: risk.DEFAULT_CONFIG,
   });
+});
+
+// GET /api/market/:coin
+app.get('/api/market/:coin', async (req, res) => {
+  const coin = getRequestedCoin(req, res);
+  if (!coin) return;
+
+  try {
+    const bundle = await fetchMarketBundle(coin);
+    res.json(bundle);
+  } catch (e) {
+    res.status(502).json({
+      error: 'market_fetch_failed',
+      coin,
+      message: e.message,
+      hint: 'Backend could not reach the configured market data provider.',
+    });
+  }
 });
 
 // POST /api/train/:coin
