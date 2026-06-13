@@ -226,9 +226,8 @@ function calibrateConfidenceV2(rawConf,hist,regime,ensembleAgreement,rlConf){
   // RL confidence contribution
   if(rlAgents[currentTab].steps>20) cal*=(0.82+rlConf*0.18);
   // Regime penalty
-  if(rt==='volatile')cal*=0.82;
+  if(regime.type==='volatile')cal*=0.82;
   return Math.round(clamp(cal*100,18,96));
-  function rt(){return regime.type||'neutral';}
 }
 
 // ═══════════════════════════════════════════
@@ -642,7 +641,7 @@ function renderPanel(key,status,errorMsg){
     <div><div class="coin-label ${coin.cls}">${coin.label}</div>
       <div class="status-row"><div class="dot ${status}"></div><span class="status-text">${status==='live'?'Live · '+now:status==='error'?'Offline':'Connecting…'}</span>
       <span id="ws-badge-${key}" style="font-size:10px;color:#f59e0b">⟳ WS…</span>
-      ${lastPred[key]&&!lastPred[key].checked?`<span id="countdown-${key}" style="font-size:10px;color:#627EEA">⏱ checking in …</span>`:''}
+      ${lastPred[key]&&!lastPred[key].checked?`<span id="countdown-${key}" style="font-size:10px;color:#627EEA">⏱ ${Math.max(0,Math.round((lastPred[key].checkAt-Date.now())/1000))}s</span>`:''}
       </div>
     </div>
     <div style="text-align:right">
@@ -968,8 +967,28 @@ async function init(key){
   connectWS(key);
   fetchArbitrageData(key);
   intervals[key]=setInterval(()=>refreshREST(key),15000);
+  pingServerPredict(key); // kick off server-side paper trading immediately
 }
 Object.keys(COINS).forEach(key=>init(key));
+
+// ── Server ping every 5 min ─────────────────────────────
+// crypto.html runs client-side only; this call lets the server
+// do paper trading and feed the dashboard without blocking the UI.
+async function pingServerPredict(key){
+  try{ await fetch(`/api/predict/${key}`); }catch(e){}
+}
+setInterval(()=>{ Object.keys(COINS).forEach(key=>pingServerPredict(key)); }, 5*60*1000);
+
+// ── Background-tab prediction check ────────────────────
+// renderPanel only runs for the active tab, so the inactive coin's
+// 5-min check would never fire. This fixes that.
+setInterval(()=>{
+  Object.keys(COINS).forEach(key=>{
+    const s=state[key];
+    const price=s.ticker?parseFloat(s.ticker.lastPrice):(s.prices.length?s.prices[s.prices.length-1]:null);
+    if(price)checkLastPrediction(key,price);
+  });
+}, 30*1000);
 </script>
 </body>
 </html>

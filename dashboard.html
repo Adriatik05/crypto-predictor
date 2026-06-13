@@ -107,7 +107,7 @@
 </div>
 
 <script>
-const API = 'http://localhost:3000/api';
+const API = '/api';
 let data = { BTC:{}, ETH:{}, status:{} };
 
 function showPage(id) {
@@ -316,7 +316,7 @@ function renderSignalFeed() {
   let html = '';
   ['BTC','ETH'].forEach(coin => {
     const s = data.status?.[coin];
-    const pp = s?.pending_pred;
+    const pp = s?.pending_shadow_checks?.[0]; // server returns an array now
     const sess = s?.session;
     if (!s) return;
     html += `<div class="signal-row">
