@@ -40,7 +40,7 @@ const DEFAULT_CONFIG = {
     maxTradesPerDay: 20,
     minConfidence: 72,
     minAgreement: 0.80,
-    minRegimes: ['bull', 'bear'],
+    minRegimes: ['bull', 'bear', 'neutral'],
     requireMACDCross: false,
     minExpectedEdgePct: 0.003,
     minDirectionalScore: 0.18,

@@ -98,11 +98,12 @@ function shouldTrade(coin, signal, confidence, agreement, regime, price, capital
     reasons.push(`max ${config.maxOpenPositions} open positions`);
   }
 
-  // 7. Minimum edge after fees
+  // 7. Minimum expected edge after fees (proper EV: P(win)*TP - P(loss)*SL - fees)
   const roundTripCost = (config.feePct + config.slippagePct) * 2;
-  const expectedEdge  = (confidence / 100 - 0.5) * config.stopLossPct * 2; // rough edge estimate
-  if (expectedEdge < config.minExpectedEdgePct + roundTripCost) {
-    reasons.push(`edge ${(expectedEdge*100).toFixed(3)}% < min after fees`);
+  const pWin          = confidence / 100;
+  const expectedEdge  = pWin * config.takeProfitPct - (1 - pWin) * config.stopLossPct - roundTripCost;
+  if (expectedEdge < config.minExpectedEdgePct) {
+    reasons.push(`edge ${(expectedEdge * 100).toFixed(3)}% < min ${(config.minExpectedEdgePct * 100).toFixed(3)}%`);
   }
 
   const allowed = reasons.length === 0;

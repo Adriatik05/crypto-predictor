@@ -197,7 +197,21 @@ function renderOverview() {
 function renderPaperPage() {
   const coin = document.getElementById('paper-coin')?.value || 'BTC';
   const p = data[coin]?.paper || {};
-  if (!p.trades) { document.getElementById('paper-content').innerHTML = '<div class="empty">No paper trades yet. Server needs to be running and signals need to pass risk filters.</div>'; return; }
+  if (!p.trades && !p.openTrade) { document.getElementById('paper-content').innerHTML = '<div class="empty">No paper trades yet. Server needs to be running and signals need to pass risk filters.</div>'; return; }
+  if (!p.trades) {
+    // Open trade exists but no closed history yet — show it
+    document.getElementById('paper-content').innerHTML = `
+      <div class="sec">
+        <div class="sec-t"><span>OPEN TRADE</span><span class="badge" style="background:#22c55e22;color:#22c55e">● Live</span></div>
+        <div style="padding:12px 14px;background:#13181f;border-radius:10px;border:1px solid ${sc(p.openTrade.signal)}40">
+          <div style="color:${sc(p.openTrade.signal)};font-weight:800;font-size:16px">${si(p.openTrade.signal)} ${p.openTrade.signal} @ $${fmt(p.openTrade.entry_price)}</div>
+          <div style="font-size:11px;color:#555;margin-top:6px">SL: $${fmt(p.openTrade.stop_loss)} &nbsp;·&nbsp; TP: $${fmt(p.openTrade.take_profit)} &nbsp;·&nbsp; Opened: ${new Date(p.openTrade.opened_at).toLocaleTimeString()}</div>
+          <div style="font-size:11px;color:#444;margin-top:4px">Conf: ${p.openTrade.confidence}% &nbsp;·&nbsp; Regime: ${p.openTrade.regime||'—'} &nbsp;·&nbsp; Model: ${p.openTrade.model_version||'—'}</div>
+        </div>
+      </div>
+      <div class="empty" style="margin-top:12px">Waiting for first trade to close (SL / TP / 15-min timeout)…</div>`;
+    return;
+  }
 
   let html = `
     <div class="sec">
