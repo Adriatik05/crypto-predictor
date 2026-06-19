@@ -83,7 +83,7 @@ const API = location.protocol === 'file:' ? 'http://localhost:3000/api' : '/api'
 
 // ── Storage ──────────────────────────────────────────────
 const DW={rsi:2,wilderRsi:2.5,ema:2,emaCross:2.5,macd:1.5,macdCross:2,bb:1.5,adx:1.5,vwap:1.2,vdelta:1,ob:1.5,mtf:1.5,mom:1,pattern:2.5,spike:1.5,stochRsi:2,williamsR:1.5,cci:1.5,regime:2,tod:1,cvd:1.8,liq:2,orderFlow:2,lstm:2.5,rl:2};
-function ld(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch{return fb;}}
+function ld(k,fb){try{const v=localStorage.getItem(k);if(v==null)return fb;const parsed=JSON.parse(v);return(parsed===null||parsed===undefined)?fb:parsed;}catch{return fb;}}
 function sv(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 
 const predHistory={BTC:ld("pH_BTC",[]),ETH:ld("pH_ETH",[])};
@@ -211,7 +211,7 @@ function getDynamicWeights(key,regime,tod,volatility){
 // ═══════════════════════════════════════════
 // 4. CONFIDENCE CALIBRATION V2
 // ═══════════════════════════════════════════
-function calibrateConfidenceV2(rawConf,hist,regime,ensembleAgreement,rlConf){
+function calibrateConfidenceV2(rawConf,hist,regime,ensembleAgreement,rlConf,key){
   let cal=rawConf/100;
   // Penalize disagreement
   cal*=(0.55+ensembleAgreement*0.45);
@@ -224,8 +224,9 @@ function calibrateConfidenceV2(rawConf,hist,regime,ensembleAgreement,rlConf){
     const acc=hist.filter(h=>h.correct).length/hist.length;
     cal*=(0.5+acc);
   }
-  // RL confidence contribution
-  if(rlAgents[currentTab].steps>20) cal*=(0.82+rlConf*0.18);
+  // RL confidence contribution — use the coin actually being scored, not the active tab
+  const agent=rlAgents[key||currentTab];
+  if(agent&&agent.steps>20) cal*=(0.82+rlConf*0.18);
   // Regime penalty
   if(regime.type==='volatile')cal*=0.82;
   return Math.round(clamp(cal*100,18,96));
@@ -542,10 +543,10 @@ function masterPredict(key,prices,candles,ob,tf){
   const agreeCount=modelScores.filter(s=>Math.sign(s)===Math.sign(rawScore)).length;
   const agreement=agreeCount/5;
   const rawConf=Math.round(clamp(50+Math.abs(rawScore)*58,20,97));
-  const confidence=calibrateConfidenceV2(rawConf,predHistory[key],regime,agreement,rlC);
-  const probs=calcProbabilities(rawScore,regime,tod,predHistory[key]);
+  const confidence=calibrateConfidenceV2(rawConf,predHistory[key]||[],regime,agreement,rlC,key);
+  const probs=calcProbabilities(rawScore,regime,tod,predHistory[key]||[]);
   // Kelly
-  const hist=predHistory[key];
+  const hist=predHistory[key]||[];
   const winRate=hist.length>0?hist.filter(h=>h.correct).length/hist.length:0.5;
   const wins=hist.filter(h=>h.correct&&h.priceDiff);const losses=hist.filter(h=>!h.correct&&h.priceDiff);
   const avgWin=wins.length>0?wins.reduce((a,b)=>a+Math.abs(parseFloat(b.priceDiff)),0)/wins.length:0.5;
@@ -586,7 +587,7 @@ function resetHistory(key){
   predHistory[key]=[];lastPred[key]=null;mlWeights[key]={...DW};indAcc[key]={};
   pnlTracker[key]={trades:0,wins:0,totalPnl:0,maxDD:0,runningPnl:0};
   seqDB[key]=[];rlAgents[key]={q:{},alpha:0.15,steps:0};
-  ['pH','lP','mW','iA','pnl','seqDB','rl'].forEach(k=>sv(`${k}_${key}`,null));
+  ['pH','lP','mW','iA','pnl','seqDB','rl'].forEach(k=>{try{localStorage.removeItem(`${k}_${key}`);}catch{}});
   renderPanel(key,'live');
 }
 
@@ -627,8 +628,8 @@ function renderPanel(key,status,errorMsg){
   const of=calcOrderFlow(s.trades);
   const liq=calcLiquidityAnalysis(s.ob,price||s.prices[s.prices.length-1],atr);
   const arb=arbState[key];
-  const hist=predHistory[key];
   const pnl=pnlTracker[key];
+  const hist=predHistory[key]||[];
   const accuracy=hist.length>0?Math.round(hist.filter(h=>h.correct).length/hist.length*100):null;
   const sharpe=(()=>{if(hist.length<5)return null;const rets=hist.map(h=>{const pd=parseFloat(h.priceDiff||0);return h.signal==='DOWN'?-pd:pd;});const mean=rets.reduce((a,b)=>a+b,0)/rets.length,std=Math.sqrt(rets.reduce((a,b)=>a+(b-mean)**2,0)/rets.length)||0.001;return(mean/std*Math.sqrt(rets.length)).toFixed(2);})();
   const lastPrice=price||s.prices[s.prices.length-1]||0;
