@@ -604,7 +604,9 @@ function renderPanel(key,status,errorMsg){
   const now=new Date().toLocaleTimeString();
   if(price)checkLastPrediction(key,price);
 
-  const ml=s.prices.length>=50?masterPredict(key,s.prices,s.candles,s.ob,s.tf):null;
+  let ml=null;
+  try{ml=s.prices.length>=50?masterPredict(key,s.prices,s.candles,s.ob,s.tf):null;}
+  catch(e){console.error('[masterPredict]',e.message,e);}
   const macdData=calcMACD(s.prices);
   const lastM=macdData&&macdData.length>1?macdData[macdData.length-1]:null;
   const prevM=macdData&&macdData.length>1?macdData[macdData.length-2]:null;
@@ -738,7 +740,7 @@ function renderPanel(key,status,errorMsg){
 
     // MTF
     html+=`<div class="sec"><div class="sec-t"><span>MULTI-TIMEFRAME</span></div>
-      <div class="mtf-grid">${['1m','5m','15m'].map(tf=>{const sig=s.tf[tf]||'UP';const c=sc(sig);return`<div class="mtf-card"><div class="mtf-tf">${tf}</div><div class="mtf-sig" style="color:${c}">${si(sig)} ${sig}</div></div>`;}).join('')}</div>
+      <div class="mtf-grid">${['1m','5m','15m'].map(tf=>{const r=s.tf[tf];const sig=r?(r.trend==='bull'?'UP':r.trend==='bear'?'DOWN':'SIDE'):'—';const c=sig==='UP'?'#22c55e':sig==='DOWN'?'#ef4444':'#888';return`<div class="mtf-card"><div class="mtf-tf">${tf}</div><div class="mtf-sig" style="color:${c}">${sig==='UP'?'▲':sig==='DOWN'?'▼':'↔'} ${sig}</div></div>`;}).join('')}</div>
     </div>`;
 
     // OSCILLATORS
@@ -920,7 +922,8 @@ function connectWS(key){
       const s=state[key];
       if(k.x){s.candles.push(candle);s.prices.push(cp);if(s.candles.length>500){s.candles.shift();s.prices.shift();}}
       else{if(s.candles.length>0){s.candles[s.candles.length-1]=candle;s.prices[s.prices.length-1]=cp;}}
-      if(s.ticker)s.ticker.lastPrice=k.c;
+      if(!s.ticker)s.ticker={lastPrice:k.c,priceChangePercent:'0',highPrice:k.c,lowPrice:k.c,quoteVolume:'0'};
+      else s.ticker.lastPrice=k.c;
       if(!renderScheduled){renderScheduled=true;setTimeout(()=>{renderScheduled=false;if(!mgr.dead&&key===currentTab)renderPanel(key,'live');},1000);}
     }
     if(d.e==='aggTrade'){if(!state[key].trades)state[key].trades=[];state[key].trades.push({price:parseFloat(d.p),qty:parseFloat(d.q),isBuy:!d.m,time:d.T});if(state[key].trades.length>500)state[key].trades.shift();}
@@ -955,11 +958,18 @@ async function refreshREST(key){
     const klines=data.klines1m;
     state[key].prices=klines.map(k=>parseFloat(k[4]));
     state[key].candles=klines.map(k=>({open:parseFloat(k[1]),high:parseFloat(k[2]),low:parseFloat(k[3]),close:parseFloat(k[4]),volume:parseFloat(k[5])}));
+    // Bug fix: keep 5m/15m timeframe signals fresh on every poll, not just at init
+    if(data.klines5m&&data.klines15m){
+      state[key].tf={
+        '1m':getMTFSignal(klines.map(k=>parseFloat(k[4]))),
+        '5m':getMTFSignal(data.klines5m.map(k=>parseFloat(k[4]))),
+        '15m':getMTFSignal(data.klines15m.map(k=>parseFloat(k[4]))),
+      };
+    }
     if(key===currentTab)renderPanel(key,'live');
   }catch(e){
     state[key].lastError=e.message;
     // Only update the status dot — don't wipe the live panel on a transient REST failure
-    // (WebSocket is still streaming live price data)
     const dot=document.querySelector(`#panel-${key} .dot`);
     if(dot){dot.className='dot error';}
     const stEl=document.querySelector(`#panel-${key} .status-text`);
@@ -970,12 +980,17 @@ async function refreshREST(key){
 async function init(key){
   renderPanel(key,'connecting');
   const ok=await loadREST(key);
-  if(!ok){renderPanel(key,'error',state[key].lastError||`Could not reach backend market API at ${API}. Start node server.js and open http://localhost:3000/crypto.html`);return;}
-  renderPanel(key,'live');
+  // Always start WebSocket regardless of REST result — it goes direct to Binance
+  // so the page shows live price data even if the local server is down.
   connectWS(key);
-  fetchArbitrageData(key);
   intervals[key]=setInterval(()=>refreshREST(key),15000);
-  pingServerPredict(key); // kick off server-side paper trading immediately
+  if(!ok){
+    renderPanel(key,'error',state[key].lastError||`Could not reach backend at ${API}. Is node server.js running? Open http://localhost:3000/crypto.html`);
+    return;
+  }
+  renderPanel(key,'live');
+  fetchArbitrageData(key);
+  pingServerPredict(key);
 }
 Object.keys(COINS).forEach(key=>init(key));
 
